@@ -14,9 +14,12 @@ import {
   TrendingUp, 
   Info, 
   Save, 
-  ClipboardCopy 
+  ClipboardCopy,
+  Send,
+  GitFork,
+  Check
 } from 'lucide-react';
-import { Employee, Evaluation, JobProfile, Criterion, getGrade, GRADE_DETAILS } from '../types';
+import { Employee, Evaluation, JobProfile, Criterion, getGrade, GRADE_DETAILS, WORKFLOW_STAGES, WorkflowTransitionLog, WorkflowStageKey } from '../types';
 
 interface MyEvaluationProps {
   currentUser: Employee;
@@ -81,6 +84,50 @@ export default function MyEvaluation({
     onUpdateEvaluation(userEval.id, { ...userEval, scores: updatedScores });
   };
 
+  const [submitFeedback, setSubmitFeedback] = useState<string | null>(null);
+
+  const handleSubmitToSupervisor = () => {
+    if (!userEval) return;
+    
+    // Ensure all criteria are given a self-score
+    const unrated = userProfile?.items.some(it => {
+      const score = userEval?.scores.find(s => s.cid === it.cid);
+      return !score || score.self === 0;
+    });
+
+    if (unrated) {
+      if (!confirm('برخی از شاخص‌ها هنوز خودارزیابی نشده‌اند. آیا مایلید پرونده با نمرات فعلی به سرپرست مستقیم ارسال شود؟')) {
+        return;
+      }
+    }
+
+    const newLog: WorkflowTransitionLog = {
+      id: `trans-${Date.now()}`,
+      fromStage: userEval.stage || 'self_review',
+      toStage: 'supervisor_review',
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      actorRole: currentUser.role,
+      action: 'submit_self',
+      comment: 'ثبت نهایی خودارزیابی و ارسال به کارتابل سرپرست مستقیم جهت ارزیابی',
+      timestamp: new Intl.DateTimeFormat('fa-IR', {
+        dateStyle: 'short',
+        timeStyle: 'medium'
+      }).format(new Date())
+    };
+
+    const updatedHistory = [newLog, ...(userEval.history || [])];
+
+    onUpdateEvaluation(userEval.id, {
+      ...userEval,
+      stage: 'supervisor_review',
+      history: updatedHistory
+    });
+
+    setSubmitFeedback('خودارزیابی شما با موفقیت ثبت و به کارتابل سرپرست مستقیم ارسال گردید.');
+    setTimeout(() => setSubmitFeedback(null), 5000);
+  };
+
   const handleSaveSelfAssessment = () => {
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);
@@ -119,6 +166,8 @@ export default function MyEvaluation({
   const selfScoreAvg = userEval ? calculateSelfScoreAvg(userEval) : 0;
   const grade = getGrade(finalScore);
   const gradeDetail = GRADE_DETAILS[grade];
+  const currentStage = userEval?.stage || 'self_review';
+  const stageInfo = WORKFLOW_STAGES[currentStage] || WORKFLOW_STAGES.self_review;
 
   return (
     <div className="space-y-6 text-right" dir="rtl">
@@ -137,8 +186,54 @@ export default function MyEvaluation({
             </p>
           </div>
         </div>
-        <div className="bg-slate-950/60 px-4 py-2 rounded-xl text-xs border border-slate-800 font-bold text-teal-400">
-          دوره ارزیابی: {period}
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-950/60 px-4 py-2 rounded-xl text-xs border border-slate-800 font-bold text-teal-400">
+            دوره ارزیابی: {period}
+          </div>
+        </div>
+      </div>
+
+      {/* Live Workflow Status Banner for Employee */}
+      <div className={`p-5 rounded-3xl border ${
+        theme === 'dark' ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+      }`}>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2.5">
+            <GitFork className="w-5 h-5 text-teal-400" />
+            <span className="text-xs font-bold text-slate-200">وضعیت گردش کار پرونده شما:</span>
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-teal-500/20 text-teal-300 border border-teal-500/30">
+              {stageInfo.label}
+            </span>
+          </div>
+
+          <div className="text-xs text-slate-400">
+            مسئول کنونی اقدام: <strong className="text-slate-200">{stageInfo.responsibleLabel}</strong>
+          </div>
+        </div>
+
+        {/* Stepper Dots */}
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 pt-2">
+          {(['self_review', 'supervisor_review', 'calibration_review', 'hr_approval', 'feedback_meeting', 'completed'] as WorkflowStageKey[]).map((stKey) => {
+            const st = WORKFLOW_STAGES[stKey];
+            const isCurrent = currentStage === stKey;
+            const isPassed = st.stepNumber < stageInfo.stepNumber;
+
+            return (
+              <div
+                key={stKey}
+                className={`p-2.5 rounded-2xl text-center border transition-all ${
+                  isCurrent
+                    ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold shadow-md'
+                    : isPassed
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    : 'bg-slate-950/40 border-slate-800 text-slate-500'
+                }`}
+              >
+                <div className="text-[10px] font-bold">{st.label}</div>
+                <div className="text-[9px] mt-0.5 opacity-80">{isPassed ? '✓ انجام شد' : isCurrent ? '● در جریان' : 'در انتظار'}</div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -150,20 +245,37 @@ export default function MyEvaluation({
           <div className={`p-6 rounded-3xl border ${
             theme === 'dark' ? 'bg-slate-900/30 border-slate-800/80' : 'bg-white border-slate-200'
           }`}>
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6">
               <div>
                 <h3 className="text-sm font-bold text-slate-200">ثبت و ویرایش خودارزیابی</h3>
                 <p className="text-[10px] text-slate-500 mt-0.5">دیدگاه خود را نسبت به عملکرد فردی در هر یک از شاخص‌ها ثبت کنید.</p>
               </div>
 
-              <button
-                onClick={handleSaveSelfAssessment}
-                className="px-4 py-2 bg-teal-500 hover:bg-teal-600 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow"
-              >
-                <Save className="w-4 h-4" />
-                <span>ذخیره خودارزیابی</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSaveSelfAssessment}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer border border-slate-700"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>ذخیره پیش‌نویس</span>
+                </button>
+
+                <button
+                  onClick={handleSubmitToSupervisor}
+                  className="px-4 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-lg shadow-teal-500/20"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>ارسال نهایی به سرپرست</span>
+                </button>
+              </div>
             </div>
+
+            {submitFeedback && (
+              <div className="mb-4 bg-teal-500/10 border border-teal-500/30 text-teal-300 p-3.5 rounded-2xl text-xs font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
+                <span>{submitFeedback}</span>
+              </div>
+            )}
 
             {saveSuccess && (
               <div className="mb-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 p-3.5 rounded-2xl text-xs font-semibold flex items-center gap-2">

@@ -43,6 +43,7 @@ import {
   FileCheck
 } from 'lucide-react';
 import { Employee, JobProfile, Criterion, Evaluation, UserRole, UserCustomPermission } from '../types';
+import ExcelIntegrationCenter from './ExcelIntegrationCenter';
 
 export interface SystemLog {
   id: string;
@@ -80,6 +81,9 @@ export default function ManagementCenter({
 }: ManagementCenterProps) {
   // Navigation Tab inside Management Center
   const [activeSectionTab, setActiveSectionTab] = useState<'security' | 'rbac' | 'backup' | 'logs' | 'all'>('security');
+
+  // Excel Integration Modal State
+  const [isExcelIntegrationOpen, setIsExcelIntegrationOpen] = useState(false);
 
   // --- 1. USER PASSWORDS & LOCKOUT STATE ---
   const [userPasswords, setUserPasswords] = useState<Record<string, string>>(() => {
@@ -1802,6 +1806,35 @@ export default function ManagementCenter({
       {(activeSectionTab === 'backup' || activeSectionTab === 'all') && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           
+          {/* EXCEL INTEGRATION CARD (KASRA & MIS) */}
+          <div className="lg:col-span-12 bg-gradient-to-r from-slate-900 to-teal-950/40 border border-teal-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-black text-slate-100 flex items-center gap-2">
+                    <span>یکپارچه‌سازی و ورود داده از اکسل (سامانه کسری و سامانه MIS)</span>
+                    <span className="text-[10px] bg-teal-500/20 text-teal-300 font-semibold px-2 py-0.5 rounded-full font-mono">Excel Sync</span>
+                  </h2>
+                  <p className="text-xs text-teal-300 mt-0.5">دریافت فایل‌های حضور/غیاب کسری و آمار تولید/کیفیت MIS و اعمال خودکار بر نمرات ارزیابی</p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+                با استفاده از این ابزار، می‌توانید قالب‌های اکسل رسمی را دانلود کرده، داده‌های ساعات کارکرد، تاخیر، غیبت، راندمان تولید و ضایعات را بارگذاری نموده و محاسبات دقیق ۱ تا ۵ را مستقیماً در فرم‌های ارزیابی عملکرد پرسنل بنشانید.
+              </p>
+            </div>
+
+            <button
+              onClick={() => setIsExcelIntegrationOpen(true)}
+              className="bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black py-3.5 px-6 rounded-2xl text-xs flex items-center justify-center gap-2.5 transition-all cursor-pointer shadow-lg shadow-teal-500/20 shrink-0"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-slate-950" />
+              <span>باز کردن مرکز ورود داده‌های کسری و MIS</span>
+            </button>
+          </div>
+
           {/* OFFLINE STANDALONE HTML CARD */}
           <div className="lg:col-span-12 bg-gradient-to-r from-slate-900 to-indigo-950/40 border border-indigo-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
             <div className="space-y-2">
@@ -2004,6 +2037,43 @@ export default function ManagementCenter({
         </div>
       )}
 
+      {/* EXCEL INTEGRATION MODAL */}
+      <ExcelIntegrationCenter
+        isOpen={isExcelIntegrationOpen}
+        onClose={() => setIsExcelIntegrationOpen(false)}
+        employees={employees}
+        profiles={profiles}
+        criteria={criteria}
+        evaluations={evaluations}
+        currentUser={currentUser}
+        onUpdateEvaluations={onSetEvaluations}
+        onAddEvaluation={(empId, period) => {
+          const emp = employees.find(e => e.id === empId);
+          if (!emp || !emp.profileId) return;
+          const prof = profiles.find(p => p.id === emp.profileId);
+          if (!prof) return;
+
+          const scores = prof.items.map(item => ({
+            cid: item.cid,
+            weight: item.weight,
+            value: 0,
+            self: 0,
+            doc: ''
+          }));
+
+          const newEval: Evaluation = {
+            id: `eval-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            empId,
+            period,
+            profileId: prof.id,
+            status: 'draft',
+            scores,
+            note: '',
+            created: Date.now()
+          };
+          onSetEvaluations([...evaluations, newEval]);
+        }}
+      />
     </div>
   );
 }

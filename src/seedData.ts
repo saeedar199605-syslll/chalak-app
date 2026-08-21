@@ -226,7 +226,9 @@ export const SEED_EMPLOYEES: Employee[] = [
     profileId: 'prof-1', // اپراتور خط تولید
     unit: 'سالن ماشین‌کاری ۱',
     role: 'supervisor',
-    username: 'ali'
+    username: 'ali',
+    supervisorId: 'emp-admin',
+    approverId: 'emp-admin'
   },
   {
     id: 'emp-2',
@@ -235,16 +237,20 @@ export const SEED_EMPLOYEES: Employee[] = [
     profileId: 'prof-2', // QC
     unit: 'آزمایشگاه کنترل کیفیت',
     role: 'employee',
-    username: 'maryam'
+    username: 'maryam',
+    supervisorId: 'emp-4', // فاطمه سعیدی
+    approverId: 'emp-admin'
   },
   {
     id: 'emp-3',
     name: 'مهندس حسن کریمی',
     code: 'EMP-1003',
     profileId: 'prof-3', // تنظیم و راه‌اندازی Setup
-    unit: 'سالن قالب‌سازی و راه‌اندازی',
+    unit: 'سالن ماشین‌کاری ۱',
     role: 'employee',
-    username: 'hassan'
+    username: 'hassan',
+    supervisorId: 'emp-1', // علی رضایی
+    approverId: 'emp-admin'
   },
   {
     id: 'emp-4',
@@ -253,16 +259,20 @@ export const SEED_EMPLOYEES: Employee[] = [
     profileId: 'prof-2', // تضمین کیفیت
     unit: 'واحد تعالی سازمانی و کالیبراسیون',
     role: 'supervisor',
-    username: 'fatemeh'
+    username: 'fatemeh',
+    supervisorId: 'emp-admin',
+    approverId: 'emp-admin'
   },
   {
     id: 'emp-5',
     name: 'مهندس رضا ابراهیمی',
     code: 'EMP-1005',
     profileId: 'prof-1', // خط تولید
-    unit: 'سالن مونتاژ نهایی',
+    unit: 'سالن ماشین‌کاری ۱',
     role: 'employee',
-    username: 'reza'
+    username: 'reza',
+    supervisorId: 'emp-1', // علی رضایی
+    approverId: 'emp-admin'
   }
 ];
 

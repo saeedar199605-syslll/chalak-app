@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Users, 
   Plus, 
@@ -13,13 +13,16 @@ import {
   ClipboardPlus, 
   Building2, 
   UserCheck, 
-  Key, 
-  ShieldAlert,
-  UploadCloud,
-  Sparkles,
-  CheckCircle2
+  UploadCloud, 
+  Sparkles, 
+  CheckCircle2,
+  Table as TableIcon,
+  LayoutGrid,
+  Zap,
+  Layers
 } from 'lucide-react';
 import { Employee, JobProfile, UserRole } from '../types';
+import { VirtualizedTable } from './VirtualizedTable';
 
 interface EmployeesProps {
   employees: Employee[];
@@ -71,6 +74,7 @@ export default function Employees({
   onStartEvaluation
 }: EmployeesProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -86,7 +90,48 @@ export default function Employees({
   const [formProfileId, setFormProfileId] = useState('');
   const [formRole, setFormRole] = useState<UserRole>('employee');
   const [formUsername, setFormUsername] = useState('');
+  const [formSupervisorId, setFormSupervisorId] = useState('');
+  const [formPeerReviewerId, setFormPeerReviewerId] = useState('');
+  const [formCalibrationLeadId, setFormCalibrationLeadId] = useState('');
+  const [formApproverId, setFormApproverId] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Bulk benchmark generator (for testing >1,000 employees performance)
+  const handleGenerateScaleEmployees = (count: number) => {
+    const units = ['سالن ماشین‌کاری ۱', 'سالن ماشین‌کاری ۲', 'سالن مونتاژ و بسته‌بندی', 'واحد کنترل کیفیت', 'تعمیرات و نگهداری PM', 'مهندسی فرآیند و تولید', 'انبار قطعات و تدارکات'];
+    const firstNames = ['محمدرضا', 'امیرحسین', 'علیرضا', 'مهدی', 'حسین', 'سعید', 'مصطفی', 'حسن', 'فرشید', 'کاوه', 'نیما', 'پیمان', 'مجید', 'سامان', 'زهرا', 'مریم', 'فاطمه', 'سمیرا', 'الهام', 'نرگس', 'سحر'];
+    const lastNames = ['موسوی', 'صادقی', 'حیدری', 'طباطبایی', 'رحیمی', 'قاسمی', 'کاظمی', 'فرهادی', 'جعفری', 'مرادی', 'طاهری', 'اسدی', 'کریمی', 'محققی', 'دهقان', 'نظری', 'میرزایی', 'افشار', 'سلیمانی'];
+
+    let added = 0;
+    const startCodeIndex = employees.length + 1000;
+    const defaultProfId = profiles[0]?.id || 'prof-1';
+
+    for (let i = 0; i < count; i++) {
+      const f = firstNames[Math.floor(Math.random() * firstNames.length)];
+      const l = lastNames[Math.floor(Math.random() * lastNames.length)];
+      const unit = units[Math.floor(Math.random() * units.length)];
+      const codeNum = startCodeIndex + i;
+      const code = `EMP-${codeNum}`;
+      const username = `emp_${codeNum}`;
+      const role: UserRole = i % 15 === 0 ? 'supervisor' : 'employee';
+      const prof = profiles[i % profiles.length]?.id || defaultProfId;
+
+      onAddEmployee({
+        name: `${f} ${l}`,
+        code,
+        unit,
+        profileId: prof,
+        role,
+        username
+      });
+      added++;
+    }
+
+    setBulkStatusMsg({
+      text: `تعداد ${added} رکورد پرسنلی جدید برای تست مقیاس‌پذیری و مجازی‌سازی (Virtualization) به پایگاه افزوده شد. عملکرد رندر بررسی شود.`,
+      type: 'success'
+    });
+  };
 
   const openForm = (emp?: Employee) => {
     if (emp) {
@@ -97,6 +142,10 @@ export default function Employees({
       setFormProfileId(emp.profileId);
       setFormRole(emp.role || 'employee');
       setFormUsername(emp.username || '');
+      setFormSupervisorId(emp.supervisorId || '');
+      setFormPeerReviewerId(emp.peerReviewerId || '');
+      setFormCalibrationLeadId(emp.calibrationLeadId || '');
+      setFormApproverId(emp.approverId || '');
     } else {
       setEditingId(null);
       setFormName('');
@@ -105,6 +154,10 @@ export default function Employees({
       setFormProfileId(profiles[0]?.id || '');
       setFormRole('employee');
       setFormUsername('');
+      setFormSupervisorId('');
+      setFormPeerReviewerId('');
+      setFormCalibrationLeadId('');
+      setFormApproverId('');
     }
     setErrorMsg('');
     setIsModalOpen(true);
@@ -135,7 +188,11 @@ export default function Employees({
       unit: formUnit.trim(),
       profileId: formProfileId,
       role: formRole,
-      username: cleanedUsername
+      username: cleanedUsername,
+      supervisorId: formSupervisorId || undefined,
+      peerReviewerId: formPeerReviewerId || undefined,
+      calibrationLeadId: formCalibrationLeadId || undefined,
+      approverId: formApproverId || undefined
     };
 
     if (editingId) {
@@ -279,111 +336,232 @@ export default function Employees({
         </div>
       </div>
 
-      {/* Toolbar Search */}
-      <div className="bg-slate-800/30 border border-slate-800/60 p-4 rounded-2xl">
-        <div className="relative w-full md:w-80">
+      {/* Toolbar Search & View Mode Switcher */}
+      <div className="bg-slate-800/30 border border-slate-800/60 p-4 rounded-2xl flex flex-col md:flex-row gap-4 items-center justify-between">
+        <div className="relative w-full md:w-96">
           <Search className="w-4 h-4 text-slate-500 absolute right-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="جستجو در نام، کد پرسنلی، واحد یا نقش دسترسی..."
+            placeholder="جستجو در نام، کد پرسنلی، واحد، شایستگی یا نقش..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl py-2.5 pr-10 pl-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
           />
         </div>
-      </div>
 
-      {/* Employees Grid List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {filteredEmployees.map((emp) => {
-          const profile = profiles.find(p => p.id === emp.profileId);
-          return (
-            <div 
-              key={emp.id} 
-              className="bg-slate-800/20 border border-slate-800/80 rounded-2xl p-5 hover:border-slate-700 transition-all flex flex-col justify-between"
-            >
-              <div className="space-y-4">
-                {/* Employee Header */}
-                <div className="flex justify-between items-start gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-semibold text-teal-400">
-                      {emp.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-bold text-slate-100">{emp.name}</h3>
-                        <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded ${getRoleBadgeColor(emp.role)}`}>
-                          {getRoleLabel(emp.role)}
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-slate-500 font-mono mt-0.5">{emp.code} • username: <span className="text-teal-400">{emp.username}</span></p>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-1 shrink-0">
-                    <button
-                      onClick={() => openForm(emp)}
-                      className="p-1.5 text-slate-400 hover:text-teal-400 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
-                      title="ویرایش پرونده"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (confirm(`آیا از حذف پرونده پرسنلی «${emp.name}» مطمئن هستید؟`)) {
-                          onDeleteEmployee(emp.id);
-                        }
-                      }}
-                      className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
-                      title="حذف پرسنل"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                <hr className="border-slate-800/60" />
-
-                {/* Details list */}
-                <div className="space-y-2 text-xs">
-                  <div className="flex items-center gap-2 text-slate-400">
-                    <Building2 className="w-4 h-4 text-slate-500 shrink-0" />
-                    <span>واحد سازمانی:</span>
-                    <span className="text-slate-200 font-semibold">{emp.unit}</span>
-                  </div>
-
-                  <div className="flex items-center gap-2 text-slate-400">
-                    <UserCheck className="w-4 h-4 text-slate-500 shrink-0" />
-                    <span>الگوی شایستگی متناظر:</span>
-                    <span className="text-teal-400 font-bold">
-                      {profile ? `${profile.title} (${profile.code})` : 'بدون انتساب'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Start Eval Action */}
-              <div className="mt-5 pt-3 border-t border-slate-800/60">
-                <button
-                  onClick={() => onStartEvaluation(emp.id)}
-                  className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-300 font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
-                >
-                  <ClipboardPlus className="w-4 h-4 text-teal-400" />
-                  <span>راه‌اندازی ارزیابی دوره جدید</span>
-                </button>
-              </div>
-            </div>
-          );
-        })}
-
-        {filteredEmployees.length === 0 && (
-          <div className="col-span-full py-16 text-center text-slate-500 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
-            <Users className="w-12 h-12 text-slate-700 mx-auto mb-3" />
-            <p className="text-base font-bold">همکاری با این مشخصات یافت نشد</p>
-            <p className="text-xs mt-1">پرونده پرسنل را اضافه کنید یا فیلترهای جستجو را بازبینی کنید.</p>
+        <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+          <div className="text-xs text-slate-400 font-medium">
+            تعداد کل پرسنل: <span className="text-teal-400 font-bold font-mono">{filteredEmployees.length} نفر</span>
           </div>
-        )}
+
+          <div className="flex items-center bg-slate-900/80 border border-slate-700/60 p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`p-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
+                viewMode === 'table' ? 'bg-teal-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="نمای جدول مجازی‌سازی شده (مناسب بیش از ۱۰۰۰ پرسنل)"
+            >
+              <TableIcon className="w-3.5 h-3.5" />
+              <span>جدول مجازی (Virtual)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('grid')}
+              className={`p-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
+                viewMode === 'grid' ? 'bg-teal-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="نمای کارت‌های شبکه"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>کارت‌ها</span>
+            </button>
+          </div>
+        </div>
       </div>
+
+      {/* Employees Render Mode: Virtualized Table or Card Grid */}
+      {viewMode === 'table' ? (
+        <VirtualizedTable<Employee>
+          items={filteredEmployees}
+          rowHeight={68}
+          containerHeight={580}
+          keyExtractor={(emp) => emp.id}
+          columns={[
+            { header: 'اطلاعات پرسنلی و نام', className: 'w-64' },
+            { header: 'کد و نام کاربری', className: 'w-44' },
+            { header: 'واحد سازمانی', className: 'w-44' },
+            { header: 'الگوی شایستگی متناظر', className: 'flex-1' },
+            { header: 'نقش دسترسی', className: 'w-32' },
+            { header: 'عملیات', className: 'w-48 text-left' },
+          ]}
+          renderRow={(emp) => {
+            const profile = profiles.find(p => p.id === emp.profileId);
+            return (
+              <div className="flex items-center w-full justify-between text-xs py-1">
+                {/* Name & Avatar */}
+                <div className="w-64 flex items-center gap-2.5 shrink-0">
+                  <div className="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700/80 flex items-center justify-center text-xs font-bold text-teal-400 shrink-0 shadow-inner">
+                    {emp.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
+                  </div>
+                  <div className="min-w-0">
+                    <h4 className="font-bold text-slate-100 truncate">{emp.name}</h4>
+                    <span className="text-[10px] text-slate-400 truncate block">{emp.unit}</span>
+                  </div>
+                </div>
+
+                {/* Code & Username */}
+                <div className="w-44 shrink-0 font-mono text-[11px] text-slate-300">
+                  <div>{emp.code}</div>
+                  <div className="text-[10px] text-teal-400 font-sans">user: {emp.username}</div>
+                </div>
+
+                {/* Unit */}
+                <div className="w-44 shrink-0 text-slate-300 truncate font-medium">
+                  {emp.unit}
+                </div>
+
+                {/* Profile */}
+                <div className="flex-1 min-w-0 px-2">
+                  <span className="text-teal-400 bg-teal-500/10 border border-teal-500/20 px-2 py-0.5 rounded-lg text-[11px] font-bold truncate inline-block max-w-full">
+                    {profile ? `${profile.title} (${profile.code})` : 'بدون انتساب'}
+                  </span>
+                </div>
+
+                {/* Role */}
+                <div className="w-32 shrink-0">
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md ${getRoleBadgeColor(emp.role)}`}>
+                    {getRoleLabel(emp.role)}
+                  </span>
+                </div>
+
+                {/* Actions */}
+                <div className="w-48 shrink-0 flex items-center justify-end gap-1.5">
+                  <button
+                    onClick={() => onStartEvaluation(emp.id)}
+                    className="bg-teal-500/15 hover:bg-teal-500/25 text-teal-300 border border-teal-500/30 px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all"
+                    title="شروع ارزیابی عملکرد"
+                  >
+                    <ClipboardPlus className="w-3.5 h-3.5" />
+                    <span>ارزیابی</span>
+                  </button>
+                  <button
+                    onClick={() => openForm(emp)}
+                    className="p-1.5 text-slate-400 hover:text-teal-400 hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer"
+                    title="ویرایش پرونده"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm(`آیا از حذف پرونده پرسنلی «${emp.name}» مطمئن هستید؟`)) {
+                        onDeleteEmployee(emp.id);
+                      }
+                    }}
+                    className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer"
+                    title="حذف پرسنل"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          }}
+        />
+      ) : (
+        /* Employees Grid List */
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {filteredEmployees.map((emp) => {
+            const profile = profiles.find(p => p.id === emp.profileId);
+            return (
+              <div 
+                key={emp.id} 
+                className="bg-slate-800/20 border border-slate-800/80 rounded-2xl p-5 hover:border-slate-700 transition-all flex flex-col justify-between"
+              >
+                <div className="space-y-4">
+                  {/* Employee Header */}
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-semibold text-teal-400">
+                        {emp.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-bold text-slate-100">{emp.name}</h3>
+                          <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded ${getRoleBadgeColor(emp.role)}`}>
+                            {getRoleLabel(emp.role)}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-mono mt-0.5">{emp.code} • username: <span className="text-teal-400">{emp.username}</span></p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        onClick={() => openForm(emp)}
+                        className="p-1.5 text-slate-400 hover:text-teal-400 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
+                        title="ویرایش پرونده"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm(`آیا از حذف پرونده پرسنلی «${emp.name}» مطمئن هستید؟`)) {
+                            onDeleteEmployee(emp.id);
+                          }
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
+                        title="حذف پرسنل"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <hr className="border-slate-800/60" />
+
+                  {/* Details list */}
+                  <div className="space-y-2 text-xs">
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <Building2 className="w-4 h-4 text-slate-500 shrink-0" />
+                      <span>واحد سازمانی:</span>
+                      <span className="text-slate-200 font-semibold">{emp.unit}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <UserCheck className="w-4 h-4 text-slate-500 shrink-0" />
+                      <span>الگوی شایستگی متناظر:</span>
+                      <span className="text-teal-400 font-bold">
+                        {profile ? `${profile.title} (${profile.code})` : 'بدون انتساب'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Start Eval Action */}
+                <div className="mt-5 pt-3 border-t border-slate-800/60">
+                  <button
+                    onClick={() => onStartEvaluation(emp.id)}
+                    className="w-full bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-300 font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <ClipboardPlus className="w-4 h-4 text-teal-400" />
+                    <span>راه‌اندازی ارزیابی دوره جدید</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
+          {filteredEmployees.length === 0 && (
+            <div className="col-span-full py-16 text-center text-slate-500 bg-slate-800/10 rounded-2xl border border-dashed border-slate-800">
+              <Users className="w-12 h-12 text-slate-700 mx-auto mb-3" />
+              <p className="text-base font-bold">همکاری با این مشخصات یافت نشد</p>
+              <p className="text-xs mt-1">پرونده پرسنل را اضافه کنید یا فیلترهای جستجو را بازبینی کنید.</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* =========================================================================
          BULK IMPORT EMPLOYEES MODAL
@@ -583,6 +761,62 @@ export default function Employees({
                     <option value="admin">مدیر منابع انسانی (دسترسی کل)</option>
                     <option value="supervisor">سرپرست خط (ارزیابی پرسنل خط)</option>
                     <option value="employee">اپراتور کارگاه (مشاهده کارنامه و خودارزیابی)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Hierarchy: Multi-stage routing */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800/60">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">سرپرست مستقیم ارزیاب (مرحله ۲)</label>
+                  <select
+                    value={formSupervisorId}
+                    onChange={(e) => setFormSupervisorId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500 text-right"
+                  >
+                    <option value="">-- بدون سرپرست مستقیم / خودکار --</option>
+                    {employees.filter(e => e.id !== editingId && (e.role === 'supervisor' || e.role === 'admin')).map(sup => (
+                      <option key={sup.id} value={sup.id}>{sup.name} ({sup.unit})</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">ارزیاب همتا / ۳۶۰ درجه (مرحله ۳)</label>
+                  <select
+                    value={formPeerReviewerId}
+                    onChange={(e) => setFormPeerReviewerId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500 text-right"
+                  >
+                    <option value="">-- خودکار / همکار هم‌واحد --</option>
+                    {employees.filter(e => e.id !== editingId).map(p => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.unit})</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">نماینده کمیته کالیبراسیون (مرحله ۴)</label>
+                  <select
+                    value={formCalibrationLeadId}
+                    onChange={(e) => setFormCalibrationLeadId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500 text-right"
+                  >
+                    <option value="">-- کمیته کالیبراسیون عمومی (پیش‌فرض) --</option>
+                    {employees.filter(e => e.role === 'admin' || e.role === 'supervisor').map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">تاییدکننده نهایی / مدیر ارشد HR (مرحله ۵)</label>
+                  <select
+                    value={formApproverId}
+                    onChange={(e) => setFormApproverId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500 text-right"
+                  >
+                    <option value="">-- مدیر کل منابع انسانی (پیش‌فرض) --</option>
+                    {employees.filter(e => e.id !== editingId && e.role === 'admin').map(adm => (
+                      <option key={adm.id} value={adm.id}>{adm.name} ({adm.code})</option>
+                    ))}
                   </select>
                 </div>
               </div>

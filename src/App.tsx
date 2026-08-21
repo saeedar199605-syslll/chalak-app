@@ -15,6 +15,7 @@ import Login from './components/Login';
 import Onboarding from './components/Onboarding';
 import MyEvaluation from './components/MyEvaluation';
 import ManagementCenter from './components/ManagementCenter';
+import WorkflowManager from './components/WorkflowManager';
 import {
    Home,
    BookOpen,
@@ -119,43 +120,6 @@ function MainApp() {
   const [saveIndicator, setSaveIndicator] = useState(false);
   const [activeTourStep, setActiveTourStep] = useState<number | null>(null);
   
-  const tourSteps = [
-    { tab: 'dashboard', title: 'داشبورد مدیریت', desc: 'مشاهده آمار کلان سازمان و بررسی آخرین شاخص‌ها (KPIs)' },
-    { tab: 'criteria', title: 'بانک شاخص‌ها', desc: 'مدیریت و تعریف معیارهای ارزیابی عملکرد و رفتاری' },
-    { tab: 'profiles', title: 'پروفایل‌های شغلی', desc: 'ساخت و تنظیم وزن شاخص‌ها برای هر عنوان شغلی مجزا' },
-    { tab: 'employees', title: 'کارکنان', desc: 'لیست پرسنل، انتساب شغل و شروع سریع چرخه ارزیابی' },
-    { tab: 'evaluations', title: 'ارزیابی‌ها', desc: 'ثبت نمرات، آپلود مستندات و دریافت فیدبک هوشمند مربی‌گری AI' },
-    { tab: 'calibration', title: 'کالیبراسیون', desc: 'جلسات هم‌سویی نمرات برای جلوگیری از خطای هاله‌ای مدیران' },
-    { tab: 'reports', title: 'گزارشات', desc: 'تحلیل داده‌ها، توزیع نمرات و خروجی ماتریس استعداد (9-Box Grid)' },
-    { tab: 'onboarding', title: 'آموزش مفاهیم', desc: 'آموزش گام به گام سیستم و اخذ نشان صلاحیت ارزیاب' },
-    { tab: 'settings', title: 'تنظیمات امنیتی', desc: 'مدیریت پسوردها، سطوح دسترسی (RBAC) و گرفتن بکاپ کامل' }
-  ];
-
-  const handleStartTour = () => {
-    setActiveTourStep(0);
-    setCurrentTab('dashboard');
-  };
-
-  const handleNextTourStep = () => {
-    if (activeTourStep === null) return;
-    if (activeTourStep < tourSteps.length - 1) {
-      const nextStep = activeTourStep + 1;
-      setActiveTourStep(nextStep);
-      setCurrentTab(tourSteps[nextStep].tab);
-    } else {
-      setActiveTourStep(null);
-    }
-  };
-
-  const handlePrevTourStep = () => {
-    if (activeTourStep === null) return;
-    if (activeTourStep > 0) {
-      const prevStep = activeTourStep - 1;
-      setActiveTourStep(prevStep);
-      setCurrentTab(tourSteps[prevStep].tab);
-    }
-  };
-
   const sanitizeUser = (user: Employee | null): Employee | null => {
     if (!user) return null;
     if (user.role === 'admin' || user.username === 'admin' || user.name.includes('سوپر') || user.name.includes('ادمین')) {
@@ -199,6 +163,72 @@ function MainApp() {
     }
     return null;
   });
+
+  const getTourStepsForRole = (userRole: string) => {
+    if (userRole === 'employee') {
+      return [
+        { tab: 'my-evaluation', title: 'کارنامه و خودارزیابی من', desc: 'مشاهده شاخص‌های تخصصی شغل خود، امتیازدهی ۱ تا ۵ و ارسال نهایی به سرپرست' },
+        { tab: 'workflow', title: 'گردش کار و تاییدات', desc: 'رهگیری زنده پرونده در ۶ گام گردش کار و امکان ثبت اعتراض و درخواست بازنگری' },
+        { tab: 'onboarding', title: 'آموزش بدو ورود', desc: 'آشنایی کامل با آیین‌نامه ارزیابی عملکرد و پاسخ به آزمون سنجش صلاحیت' }
+      ];
+    } else if (userRole === 'supervisor') {
+      return [
+        { tab: 'dashboard', title: 'داشبورد ارزیابی و هدف‌گذاری', desc: 'پایش روند رشد عملکرد پرسنل کارگاه و ثبت اهداف بهبود فردی' },
+        { tab: 'workflow', title: 'کارتابل وظایف و گردش کار', desc: 'مشاهده سریع پرونده‌های در انتظار ارزیابی سرپرست و ارسال به کالیبراسیون' },
+        { tab: 'evaluations', title: 'فرم‌های ارزیابی و مربی‌گری هوشمند', desc: 'ثبت نمرات شاخص‌ها با مستندات الزامی و دریافت پیشنهادات تحلیلی AI' },
+        { tab: 'employees', title: 'لیست پرسنل و کنترل وضعیت', desc: 'بررسی وضعیت تکمیل ارزیابی زیرمجموعه و شروع سریع ارزیابی دوره‌ای' },
+        { tab: 'reports', title: 'تحلیل‌ها و ماتریس ۹-Box', desc: 'مشاهده نمودار توزیع نمرات و پراکندگی پرسنل بر حسب شایستگی' },
+        { tab: 'onboarding', title: 'آموزش و آزمون ارزیاب', desc: 'مرور ضوابط ضدسوگیری و اخذ نشان افتخار ارزیاب ذیصلاح' }
+      ];
+    } else {
+      // Admin / HR
+      return [
+        { tab: 'dashboard', title: 'داشبورد جامع مدیریت', desc: 'مشاهده آمار کلان سازمان، تحلیل‌های هوش مصنوعی و شاخص‌های کلیدی (KPIs)' },
+        { tab: 'workflow', title: 'مدیریت گردش کار و انتساب سازمانی', desc: 'پیکربندی مراحل سازمانی، قوانین تایید و انتساب گروهی سرپرستان' },
+        { tab: 'criteria', title: 'بانک مرکزی شاخص‌ها', desc: 'تعریف و فرمول‌بندی معیارهای کمی و کیفی بر اساس ابعاد پنج‌گانه شایستگی' },
+        { tab: 'profiles', title: 'پروفایل‌های شغلی و اوزان', desc: 'تنظیم اوزان شاخص‌ها (مجموع ۱۰۰٪) و درج اجباری شاخص ایمنی HSE' },
+        { tab: 'employees', title: 'مدیریت پرسنل و ساختار', desc: 'ویرایش پرسنل، انتساب مشاغل و تعیین سلسله‌مراتب ارزیابی' },
+        { tab: 'evaluations', title: 'فرم‌های ارزیابی سازمانی', desc: 'پایش جامع نمرات، آپلود اکسل و بررسی مستندات پرونده‌ها' },
+        { tab: 'calibration', title: 'پنل کالیبراسیون کمیته', desc: 'کنترل توزیع زنگوله‌ای نمرات و جلوگیری از تورم نمره‌ای' },
+        { tab: 'reports', title: 'گزارشات و ماتریس استعداد', desc: 'ماتریس ۹-Box، تحلیل روندها و خروجی رسمی کارنامه‌ها' },
+        { tab: 'settings', title: 'مرکز امنیت و پشتیبان‌گیری', desc: 'مدیریت کاربران، کلمات عبور، لاگ‌ها و بکاپ‌گیری ابری' }
+      ];
+    }
+  };
+
+  const currentTourSteps = currentUser ? getTourStepsForRole(currentUser.role) : [];
+
+  const handleStartTour = () => {
+    if (!currentUser) return;
+    const steps = getTourStepsForRole(currentUser.role);
+    if (steps.length > 0) {
+      setActiveTourStep(0);
+      setCurrentTab(steps[0].tab);
+    }
+  };
+
+  const handleNextTourStep = () => {
+    if (activeTourStep === null || !currentUser) return;
+    const steps = getTourStepsForRole(currentUser.role);
+    if (activeTourStep < steps.length - 1) {
+      const nextStep = activeTourStep + 1;
+      setActiveTourStep(nextStep);
+      setCurrentTab(steps[nextStep].tab);
+    } else {
+      setActiveTourStep(null);
+      localStorage.setItem('pe_tour_completed_' + currentUser.id + '_' + currentUser.role, 'true');
+    }
+  };
+
+  const handlePrevTourStep = () => {
+    if (activeTourStep === null || !currentUser) return;
+    const steps = getTourStepsForRole(currentUser.role);
+    if (activeTourStep > 0) {
+      const prevStep = activeTourStep - 1;
+      setActiveTourStep(prevStep);
+      setCurrentTab(steps[prevStep].tab);
+    }
+  };
 
   const [hasCertifiedBadge, setHasCertifiedBadge] = useState<boolean>(() => {
     return localStorage.getItem('pe_certified_badge') === 'true';
@@ -292,10 +322,28 @@ function MainApp() {
 
   const handleLogin = (emp: Employee) => {
     setCurrentUser(emp);
-    if (emp.role === 'employee') {
-      setCurrentTab('my-evaluation');
+    
+    // Check if onboarding or tour is needed for this role
+    const hasSeenRoleTour = localStorage.getItem('pe_tour_completed_' + emp.id + '_' + emp.role);
+    const hasOnboarded = localStorage.getItem('pe_onboarded_' + emp.id);
+
+    if (!hasOnboarded) {
+      setCurrentTab('onboarding');
+    } else if (!hasSeenRoleTour) {
+      if (emp.role === 'employee') {
+        setCurrentTab('my-evaluation');
+      } else {
+        setCurrentTab('dashboard');
+      }
+      setTimeout(() => {
+        handleStartTour();
+      }, 400);
     } else {
-      setCurrentTab('dashboard');
+      if (emp.role === 'employee') {
+        setCurrentTab('my-evaluation');
+      } else {
+        setCurrentTab('dashboard');
+      }
     }
   };
 
@@ -308,10 +356,27 @@ function MainApp() {
     const emp = employees.find(e => e.id === empId);
     if (emp) {
       setCurrentUser(emp);
-      if (emp.role === 'employee') {
-        setCurrentTab('my-evaluation');
+      
+      const hasSeenRoleTour = localStorage.getItem('pe_tour_completed_' + emp.id + '_' + emp.role);
+      const hasOnboarded = localStorage.getItem('pe_onboarded_' + emp.id);
+
+      if (!hasOnboarded) {
+        setCurrentTab('onboarding');
+      } else if (!hasSeenRoleTour) {
+        if (emp.role === 'employee') {
+          setCurrentTab('my-evaluation');
+        } else {
+          setCurrentTab('dashboard');
+        }
+        setTimeout(() => {
+          handleStartTour();
+        }, 400);
       } else {
-        setCurrentTab('dashboard');
+        if (emp.role === 'employee') {
+          setCurrentTab('my-evaluation');
+        } else {
+          setCurrentTab('dashboard');
+        }
       }
     }
   };
@@ -456,6 +521,7 @@ function MainApp() {
   const getTabTitle = (tab: string) => {
     switch (tab) {
       case 'dashboard': return 'داشبورد مدیریت';
+      case 'workflow': return 'گردش کار و تاییدات';
       case 'criteria': return 'بانک شاخص‌ها';
       case 'profiles': return 'پروفایل‌های شغلی';
       case 'employees': return 'مدیریت کارکنان';
@@ -506,13 +572,14 @@ function MainApp() {
       <main className={`flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 transition-colors duration-300 ${theme === 'dark' ? 'bg-slate-950/60 backdrop-blur-3xl' : 'bg-slate-100/40'}`}>
         <div className="max-w-7xl mx-auto space-y-6">
           {currentTab === 'dashboard' && <Dashboard criteria={criteria} profiles={profiles} employees={employees} evaluations={evaluations} onNavigate={setCurrentTab} onSelectEvaluation={handleSelectEvaluation} currentUser={currentUser} hasCertifiedBadge={hasCertifiedBadge} />}
+          {currentTab === 'workflow' && <WorkflowManager currentUser={currentUser} evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} theme={theme} />}
           {currentTab === 'criteria' && <CriteriaBank criteria={criteria} onAddCriterion={handleAddCriterion} onUpdateCriterion={handleUpdateCriterion} onDeleteCriterion={handleDeleteCriterion} />}
           {currentTab === 'profiles' && <JobProfiles profiles={profiles} criteria={criteria} onAddProfile={handleAddProfile} onUpdateProfile={handleUpdateProfile} onDeleteProfile={handleDeleteProfile} onToggleLockProfile={handleToggleLockProfile} />}
           {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onDeleteEmployee={handleDeleteEmployee} onStartEvaluation={handleStartEvaluationDirect} />}
-          {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onDeleteEvaluation={handleDeleteEvaluation} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} />}
+          {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onDeleteEvaluation={handleDeleteEvaluation} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} currentUser={currentUser} />}
           {currentTab === 'calibration' && <Calibration evaluations={evaluations} employees={employees} profiles={profiles} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} />}
           {currentTab === 'reports' && <Reports evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} />}
-          {currentTab === 'onboarding' && <Onboarding onComplete={() => { if (currentUser) localStorage.setItem('pe_onboarded_' + currentUser.id, 'true'); if (currentUser && currentUser.role === 'employee') setCurrentTab('my-evaluation'); else setCurrentTab('dashboard'); }} hasCertifiedBadge={hasCertifiedBadge} onGrantBadge={() => setHasCertifiedBadge(true)} theme={theme} />}
+          {currentTab === 'onboarding' && <Onboarding currentUser={currentUser} onComplete={() => { if (currentUser) localStorage.setItem('pe_onboarded_' + currentUser.id, 'true'); if (currentUser && currentUser.role === 'employee') setCurrentTab('my-evaluation'); else setCurrentTab('dashboard'); }} hasCertifiedBadge={hasCertifiedBadge} onGrantBadge={() => setHasCertifiedBadge(true)} theme={theme} />}
           {currentTab === 'my-evaluation' && <MyEvaluation currentUser={currentUser} evaluations={evaluations} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onAddEvaluation={handleAddEvaluation} theme={theme} />}
           {currentTab === 'settings' && <ManagementCenter employees={employees} profiles={profiles} criteria={criteria} evaluations={evaluations} onSetEmployees={setEmployees} onSetProfiles={setProfiles} onSetCriteria={setCriteria} onSetEvaluations={setEvaluations} currentUser={currentUser} theme={theme} />}
         </div>
@@ -576,7 +643,7 @@ function MainApp() {
         </div>
       )}
       
-      {activeTourStep !== null && (
+      {activeTourStep !== null && currentTourSteps[activeTourStep] && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-[999] p-4 font-sans text-right" dir="rtl">
            <div className="bg-slate-900 border border-teal-500/40 p-6 rounded-3xl max-w-md w-full space-y-4 shadow-2xl animate-in zoom-in-95 duration-200">
              <div className="flex justify-between items-center border-b border-slate-800 pb-3">
@@ -584,18 +651,18 @@ function MainApp() {
                  <div className="w-2.5 h-2.5 rounded-full bg-teal-400 animate-ping" />
                  <h3 className="text-sm font-black text-teal-400">راهنمای هوشمند</h3>
                </div>
-               <span className="text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2.5 py-1 rounded-lg font-mono">{activeTourStep + 1} از {tourSteps.length}</span>
+               <span className="text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2.5 py-1 rounded-lg font-mono">{activeTourStep + 1} از {currentTourSteps.length}</span>
              </div>
              <div className="space-y-2">
-               <h4 className="text-sm font-black text-slate-100">{tourSteps[activeTourStep].title}</h4>
-               <p className="text-xs text-slate-400 leading-relaxed font-medium">{tourSteps[activeTourStep].desc}</p>
+               <h4 className="text-sm font-black text-slate-100">{currentTourSteps[activeTourStep].title}</h4>
+               <p className="text-xs text-slate-400 leading-relaxed font-medium">{currentTourSteps[activeTourStep].desc}</p>
              </div>
              <div className="flex justify-between items-center pt-2">
                <button type="button" onClick={() => setActiveTourStep(null)} className="text-xs text-slate-500 hover:text-slate-300 font-bold transition-colors cursor-pointer">بستن آموزش</button>
                <div className="flex items-center gap-2">
                  {activeTourStep > 0 && <button type="button" onClick={handlePrevTourStep} className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2 rounded-xl text-xs transition-colors cursor-pointer border border-slate-700">قبلی</button>}
                  <button type="button" onClick={handleNextTourStep} className="bg-teal-500 hover:bg-teal-600 text-slate-950 font-black px-4 py-2 rounded-xl text-xs transition-all shadow-lg shadow-teal-500/20 cursor-pointer">
-                   {activeTourStep === tourSteps.length - 1 ? 'پایان' : 'بعدی'}
+                   {activeTourStep === currentTourSteps.length - 1 ? 'پایان' : 'بعدی'}
                  </button>
                </div>
              </div>

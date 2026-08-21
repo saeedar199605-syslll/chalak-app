@@ -40,13 +40,87 @@ export interface Employee {
   unit: string; // Department / Unit
   role: UserRole;
   username: string;
+  supervisorId?: string; // Direct supervisor (Stage 2)
+  peerReviewerId?: string; // Peer / Functional reviewer (360 feedback)
+  calibrationLeadId?: string; // Calibration committee lead (Stage 3)
+  approverId?: string; // Final HR Approver (Stage 4)
+  hrPartnerId?: string; // HR Business Partner for feedback meeting (Stage 5)
+}
+
+export type WorkflowStageKey = 
+  | 'self_review'        // خودارزیابی کارمند
+  | 'supervisor_review'  // ارزیابی سرپرست مستقیم
+  | 'peer_review'        // بازخورد همتا و ۳۶۰ درجه
+  | 'calibration_review' // کمیته کالیبراسیون و انطباق سازمانی
+  | 'hr_approval'        // تایید نهایی مدیریت منابع انسانی
+  | 'feedback_meeting'   // گفت‌وگوی بازخورد و ابلاغ کارنامه
+  | 'completed'          // خاتمه‌یافته و ثبت در سوابق
+  | 'rejected'           // عودت داده‌شده جهت بازنگری
+  | 'appealed';          // ثبت اعتراض و در حال رسیدگی کمیته تجدیدنظر
+
+export interface WorkflowTransitionLog {
+  id: string;
+  fromStage: WorkflowStageKey;
+  toStage: WorkflowStageKey;
+  actorId: string;
+  actorName: string;
+  actorRole: UserRole;
+  action: 'submit_self' | 'submit_supervisor' | 'submit_peer' | 'approve_calibration' | 'approve_hr' | 'reject_to_supervisor' | 'reject_to_employee' | 'complete_feedback' | 'submit_appeal' | 'resolve_appeal' | 'admin_override' | 'reassign_assignee';
+  comment?: string;
+  targetAssigneeName?: string;
+  timestamp: string;
+}
+
+export interface EvaluationRouteRule {
+  id: string;
+  title: string;
+  unit?: string; // Specific unit or 'all'
+  profileId?: string; // Specific profile or 'all'
+  requiresSelfReview: boolean;
+  requiresSupervisorReview: boolean;
+  requiresPeerReview?: boolean;
+  requiresCalibration: boolean;
+  requiresHrApproval: boolean;
+  autoAdvanceOnPass: boolean;
+  maxSlaDaysPerStage?: number; // Days allowed before SLA breach
+  defaultSupervisorId?: string;
+  defaultApproverId?: string;
+}
+
+export interface IDPItem {
+  id: string;
+  competencyArea: string; // e.g. "دقت و انضباط فرآیندی"
+  actionType: 'training_course' | 'on_the_job' | 'mentorship' | 'job_shadowing' | 'project_assignment';
+  title: string;
+  description: string;
+  targetDate: string; // e.g. "۱۴۰۵/۰۸/۳۰"
+  mentorName?: string;
+  status: 'planned' | 'in_progress' | 'completed' | 'cancelled';
+  completionNotes?: string;
+}
+
+export interface GrievanceAppeal {
+  id: string;
+  evalId: string;
+  empId: string;
+  period: string;
+  appealedCriteriaIds: string[];
+  reason: string;
+  evidenceNotes?: string;
+  status: 'submitted' | 'under_review' | 'accepted_modified' | 'rejected_upheld';
+  submittedAt: string;
+  reviewedAt?: string;
+  reviewerName?: string;
+  committeeDecision?: string;
+  adjustedScoreDelta?: number;
 }
 
 export interface ScoreItem {
   cid: string;
   weight: number;
-  value: number; // 1 to 5, or 0 if unrated
-  self: number;  // 1 to 5, or 0 if unrated
+  value: number; // 1 to 5, or 0 if unrated (Supervisor)
+  self: number;  // 1 to 5, or 0 if unrated (Employee)
+  peer?: number; // 1 to 5, or 0 if unrated (Peer/360)
   doc?: string;  // Supporting document / justification
 }
 
@@ -62,14 +136,109 @@ export interface UserCustomPermission {
   canRestoreBackup: boolean;
 }
 
+export interface KasraAttendanceRecord {
+  id: string;
+  empCode: string;
+  empName?: string;
+  period: string;
+  totalWorkHours: number;
+  delayMinutes: number;
+  absenceDays: number;
+  leaveDays: number;
+  overtimeHours: number;
+  disciplineInfractions: number;
+  calculatedScore: number; // 1 to 5
+  notes?: string;
+  importedAt: string;
+}
+
+export interface MISProductionRecord {
+  id: string;
+  empCode: string;
+  empName?: string;
+  period: string;
+  producedUnits: number;
+  targetUnits: number;
+  efficiencyRate: number; // e.g. 102.5%
+  scrapRate: number; // e.g. 1.2%
+  downtimeHours: number;
+  qualityScore: number; // e.g. 98%
+  calculatedKpiScore: number; // 1 to 5
+  notes?: string;
+  importedAt: string;
+}
+
+export interface DynamicColumnMapping {
+  excelColumn: string; // Header title from Excel
+  targetType: 'staffCode' | 'staffName' | 'period' | 'criterion' | 'attendance_metric' | 'mis_metric' | 'note' | 'ignore';
+  targetCriterionId?: string; // e.g. 'c1', 'C-BEH-01'
+  targetMetricKey?: 'totalWorkHours' | 'delayMinutes' | 'absenceDays' | 'leaveDays' | 'overtimeHours' | 'disciplineInfractions' | 'producedUnits' | 'targetUnits' | 'efficiencyRate' | 'scrapRate' | 'downtimeHours' | 'qualityScore';
+}
+
+export interface DynamicExcelRowRecord {
+  id: string;
+  empCode: string;
+  empName?: string;
+  period: string;
+  jobTitle?: string;
+  unit?: string;
+  scores: Record<string, number>; // criterionId -> score 1 to 5
+  docs: Record<string, string>; // criterionId -> explanation/evidence
+  metrics: {
+    delayMinutes?: number;
+    absenceDays?: number;
+    disciplineInfractions?: number;
+    efficiencyRate?: number;
+    scrapRate?: number;
+    qualityScore?: number;
+  };
+  overallNote?: string;
+  isModifiedManually?: boolean;
+  isValid: boolean;
+  validationError?: string;
+}
+
+export interface BiasWarning {
+  type: 'halo_horns' | 'recency' | 'leniency_strictness' | 'inappropriate_tone' | 'lack_of_evidence' | 'generic';
+  title: string;
+  severity: 'high' | 'medium' | 'low';
+  description: string;
+  highlightSnippet?: string;
+}
+
+export interface BiasAnalysisResult {
+  integrityScore: number; // 0 to 100
+  hasWarnings: boolean;
+  biasesDetected: BiasWarning[];
+  suggestedRevision: string;
+  coachingAdvice: string;
+  analyzedAt: string;
+}
+
 export interface Evaluation {
   id: string;
   empId: string;
   profileId: string;
   period: string; // e.g., "نیمه اول ۱۴۰۵"
   status: 'draft' | 'calibrated' | 'locked';
+  stage?: WorkflowStageKey; // Current workflow stage
+  currentAssigneeId?: string; // Who currently has the task (e.g. employee, supervisor, HR/admin)
+  currentAssigneeName?: string;
+  currentAssigneeRole?: UserRole;
+  history?: WorkflowTransitionLog[]; // Audit trail of stage movements
+  rejectionReason?: string;
   scores: ScoreItem[];
+  potentialScore?: number; // 1 to 5 for 9-Box Grid
+  nineBoxPlacement?: {
+    performance: 'low' | 'medium' | 'high';
+    potential: 'low' | 'medium' | 'high';
+    boxTitle: string;
+    boxCategory: 'star' | 'high_performer' | 'core_player' | 'inconsistent' | 'talent_risk';
+  };
+  idpItems?: IDPItem[]; // Individual Development Plan
+  appeal?: GrievanceAppeal; // Grievance / Appeal
   note?: string; // Performance conversation summary
+  biasAnalysis?: BiasAnalysisResult;
   aiFeedback?: {
     strengths: string[];
     developmentAreas: string[];
@@ -119,6 +288,124 @@ export function getGrade(score: number): 'A' | 'B' | 'C' | 'D' | 'E' {
   if (score >= 45) return 'D';
   return 'E';
 }
+
+export const WORKFLOW_STAGES: Record<WorkflowStageKey, {
+  label: string;
+  stepNumber: number;
+  description: string;
+  badgeColor: string;
+  actorRole: UserRole | 'committee' | 'any';
+  responsibleLabel: string;
+}> = {
+  self_review: {
+    label: 'خودارزیابی کارمند',
+    stepNumber: 1,
+    description: 'ثبت نمرات خودارزیابی و شواهد توسط کارمند',
+    badgeColor: 'blue',
+    actorRole: 'employee',
+    responsibleLabel: 'کارمند (شاغل)'
+  },
+  supervisor_review: {
+    label: 'ارزیابی سرپرست مستقیم',
+    stepNumber: 2,
+    description: 'بررسی، ثبت نمرات سرپرست و شواهد ارزیابی',
+    badgeColor: 'amber',
+    actorRole: 'supervisor',
+    responsibleLabel: 'سرپرست مستقیم خط / واحد'
+  },
+  peer_review: {
+    label: 'ارزیابی ۳۶۰ درجه و همتا',
+    stepNumber: 3,
+    description: 'دریافت بازخورد همکاران و سرپرستان ماتریسی',
+    badgeColor: 'cyan',
+    actorRole: 'any',
+    responsibleLabel: 'ارزیاب همتا / سرپرست تخصصی'
+  },
+  calibration_review: {
+    label: 'کمیته کالیبراسیون و انطباق',
+    stepNumber: 4,
+    description: 'کنترل توزیع نرمال، رفع تورم نمره و هم‌ترازی سازمانی',
+    badgeColor: 'purple',
+    actorRole: 'admin',
+    responsibleLabel: 'کمیته کالیبراسیون و ارزیابی'
+  },
+  hr_approval: {
+    label: 'تایید نهایی مدیریت منابع انسانی',
+    stepNumber: 5,
+    description: 'تایید نهایی، قفل نمرات و صدور مجوز کارنامه',
+    badgeColor: 'indigo',
+    actorRole: 'admin',
+    responsibleLabel: 'مدیریت ارشد منابع انسانی'
+  },
+  feedback_meeting: {
+    label: 'گفت‌وگوی بازخورد و IDP',
+    stepNumber: 6,
+    description: 'جلسه بازخورد توسعه‌ای و تدوین برنامه بهبود فردی',
+    badgeColor: 'teal',
+    actorRole: 'supervisor',
+    responsibleLabel: 'سرپرست و شاغل'
+  },
+  completed: {
+    label: 'مختومه و بایگانی شده',
+    stepNumber: 7,
+    description: 'پرونده نهایی شده و در سوابق پرسنلی ثبت گردید',
+    badgeColor: 'emerald',
+    actorRole: 'any',
+    responsibleLabel: 'اتمام فرآیند'
+  },
+  rejected: {
+    label: 'عودت داده شده جهت اصلاح',
+    stepNumber: 0,
+    description: 'عودت به مرحله قبل به دلیل نقص مستندات یا عدم انطباق',
+    badgeColor: 'rose',
+    actorRole: 'any',
+    responsibleLabel: 'نیازمند بازنگری'
+  },
+  appealed: {
+    label: 'در حال رسیدگی به اعتراض',
+    stepNumber: 8,
+    description: 'اعتراض شاغل توسط کمیته تجدیدنظر در حال بررسی است',
+    badgeColor: 'orange',
+    actorRole: 'admin',
+    responsibleLabel: 'کمیته تجدیدنظر و فرجام‌خواهی'
+  }
+};
+
+export const NINE_BOX_MATRIX = {
+  high_high: { title: 'ستاره آینده‌ساز (Future Star)', category: 'star' as const, color: 'emerald', desc: 'عملکرد برتر و پتانسیل جهش سازمانی / گزینش برای رهبری' },
+  high_med: { title: 'پیشران با پتانسیل بالا (Growth Driver)', category: 'high_performer' as const, color: 'teal', desc: 'عملکرد عالی با ظرفیت ارتقای چندجانبه' },
+  high_low: { title: 'متخصص مجرب (Expert / Core Specialist)', category: 'high_performer' as const, color: 'blue', desc: 'عملکرد بسیار پایدار و تسلط عمیق تخصصی' },
+  med_high: { title: 'استعداد نوظهور (Emerging Talent)', category: 'high_performer' as const, color: 'cyan', desc: 'پتانسیل بالا نیازمند تثبیت و رشد عملکرد' },
+  med_med: { title: 'ستون استوار سازمان (Core Performer)', category: 'core_player' as const, color: 'indigo', desc: 'عملکرد و پتانسیل متعادل و مورد اعتماد' },
+  med_low: { title: 'شاغل موثر (Effective Contributor)', category: 'core_player' as const, color: 'amber', desc: 'انجام وظایف استاندارد، حفظ انگیزه و تثبیت' },
+  low_high: { title: 'پتانسیل خام / معمای سازمانی (Enigma)', category: 'inconsistent' as const, color: 'purple', desc: 'پتانسیل بالا اما عملکرد نامطلوب / نیازمند تغییر نقش یا انگیزش' },
+  low_med: { title: 'نیازمند توانمندسازی (Dilemma)', category: 'inconsistent' as const, color: 'orange', desc: 'نیازمند آموزش فوری و مربیگری مهارتی' },
+  low_low: { title: 'ریسک عملکردی (Underperformer)', category: 'talent_risk' as const, color: 'rose', desc: 'نیازمند برنامه اقدام اصلاحی اضطراری (PIP)' }
+};
+
+export const DEFAULT_ROUTE_RULES: EvaluationRouteRule[] = [
+  {
+    id: 'route-default-workshop',
+    title: 'مسیر استاندارد مشاغل کارگاهی و تولیدی',
+    unit: 'all',
+    profileId: 'all',
+    requiresSelfReview: true,
+    requiresSupervisorReview: true,
+    requiresCalibration: true,
+    requiresHrApproval: true,
+    autoAdvanceOnPass: false
+  },
+  {
+    id: 'route-fast-track',
+    title: 'مسیر سریع پرسنل موقت یا آزمایشی',
+    unit: 'all',
+    requiresSelfReview: false,
+    requiresSupervisorReview: true,
+    requiresCalibration: false,
+    requiresHrApproval: true,
+    autoAdvanceOnPass: true
+  }
+];
 
 export const GRADE_DETAILS = {
   A: { label: 'برجسته و ستودنی', color: 'emerald', description: 'به‌طور مستمر فراتر از سطح انتظارات عمل کرده است.' },

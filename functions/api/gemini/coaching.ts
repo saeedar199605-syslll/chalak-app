@@ -25,7 +25,7 @@ export async function onRequestPost(context) {
       {"strengths": ["..."], "developmentAreas": ["..."], "actionItems": ["..."], "summary": "..."}
     `;
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
@@ -45,9 +45,13 @@ export async function onRequestPost(context) {
     }
 
     const textResult = data.candidates[0].content.parts[0].text;
-    const parsedData = JSON.parse(textResult.trim());
+    
+    let cleanedResult = textResult.trim();
+    if (cleanedResult.startsWith('```json')) {
+        cleanedResult = cleanedResult.replace('```json', '').replace('```', '').trim();
+    }
 
-    return new Response(JSON.stringify({ feedback: parsedData }), {
+    return new Response(JSON.stringify({ feedback: JSON.parse(cleanedResult) }), {
       headers: { 'Content-Type': 'application/json' }
     });
 

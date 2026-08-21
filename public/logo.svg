@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" fill="none">
+  <defs>
+    <linearGradient id="chalakRed" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF2442" />
+      <stop offset="100%" stop-color="#D90429" />
+    </linearGradient>
+  </defs>
+  <!-- Chalak stylized red mark -->
+  <g fill="url(#chalakRed)">
+    <!-- Bottom Bowl and Left Upward Wing -->
+    <path d="M 35,95 C 40,70 70,68 85,73 C 65,80 48,95 44,118 C 38,150 62,185 105,185 C 138,185 160,162 172,135 C 178,122 188,85 190,75 C 191,73 193,76 191,80 C 182,108 170,145 152,168 C 135,190 105,200 80,196 C 45,190 22,158 22,125 C 22,108 26,98 35,95 Z" />
+    
+    <!-- Central Horizontal Wing Arch -->
+    <path d="M 40,118 C 65,116 115,116 148,122 C 160,124 165,127 163,130 C 158,135 140,136 120,134 C 85,130 55,126 40,118 Z" />
+    
+    <!-- Central Upward Feathers / Dynamic Swooshes -->
+    <path d="M 68,122 C 92,95 125,72 165,72 C 150,78 128,92 108,118 C 95,135 80,158 70,175 C 75,155 85,135 95,118 C 110,95 130,82 145,78 C 115,82 85,102 68,122 Z" />
+    
+    <!-- Top-Right Accent Swoosh -->
+    <path d="M 120,80 C 145,70 170,75 188,78 C 170,88 152,98 135,112 C 148,98 168,88 188,84 C 165,92 142,108 120,130 C 122,120 125,95 120,80 Z" />
+  </g>
+</svg>
