@@ -38,60 +38,95 @@ import {
   ClipboardCheck,
   FileSpreadsheet,
   Save,
-  HelpCircle
+  HelpCircle,
+  Bell,
+  BellOff
 } from 'lucide-react';
 import { Criterion, JobProfile, Employee, Evaluation } from './types';
 import { SEED_CRITERIA, SEED_PROFILES, SEED_EMPLOYEES, SEED_EVALUATIONS } from './seedData';
+import { browserNotifications } from './utils/browserNotifications';
 
-// --- CLOUD SYNC WRAPPER ---
+// --- CLOUD SYNC WRAPPER WITH ISOLATED SESSIONS ---
 let syncTimeout: any = null;
 
 export default function App() {
   const [syncState, setSyncState] = useState<'loading' | 'ready' | 'error'>('loading');
 
+  // Initial cloud state hydration
   useEffect(() => {
     fetch('/api/state')
       .then(res => res.json())
       .then(data => {
         if (data && Object.keys(data).length > 0) {
           for (const [key, value] of Object.entries(data)) {
-             localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+            // NEVER sync user session or individual login tokens into global storage
+            if (key === 'pe_current_user' || key === 'pe_session_user') continue;
+            localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
           }
         }
         setSyncState('ready');
       })
       .catch(err => {
-         console.error("Cloud Sync Error:", err);
-         setSyncState('ready'); // Fallback to local
+        console.error("Cloud Sync Error:", err);
+        setSyncState('ready');
       });
   }, []);
 
+  // Periodic polling for collaborative multi-user updates (e.g., changes from other devices)
+  useEffect(() => {
+    if (syncState !== 'ready') return;
+
+    const interval = setInterval(() => {
+      fetch('/api/state')
+        .then(res => res.json())
+        .then(data => {
+          if (data && Object.keys(data).length > 0) {
+            for (const [key, value] of Object.entries(data)) {
+              if (key === 'pe_current_user' || key === 'pe_session_user') continue;
+              const valStr = typeof value === 'string' ? value : JSON.stringify(value);
+              const currentVal = localStorage.getItem(key);
+              if (currentVal !== valStr) {
+                localStorage.setItem(key, valStr);
+                // Dispatch storage event so active React state hooks can re-render if needed
+                window.dispatchEvent(new Event('storage'));
+              }
+            }
+          }
+        })
+        .catch(() => {});
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [syncState]);
+
+  // Sync outbound changes to Cloudflare / server database
   useEffect(() => {
     if (syncState !== 'ready') return;
 
     const originalSetItem = localStorage.setItem;
     localStorage.setItem = function(key, value) {
       originalSetItem.apply(this, arguments);
-      if (key && key.startsWith('pe_')) {
+      // Only sync global organizational tables, NEVER user sessions
+      if (key && key.startsWith('pe_') && key !== 'pe_current_user' && key !== 'pe_session_user') {
         clearTimeout(syncTimeout);
         syncTimeout = setTimeout(() => {
-           const payload: any = {};
-           for (let i = 0; i < localStorage.length; i++) {
-             const k = localStorage.key(i);
-             if (k && k.startsWith('pe_')) {
-               try {
-                 payload[k] = JSON.parse(localStorage.getItem(k) || '""');
-               } catch {
-                 payload[k] = localStorage.getItem(k);
-               }
-             }
-           }
-           fetch('/api/state', {
-             method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
-             body: JSON.stringify(payload)
-           }).catch(console.error);
-        }, 1000);
+          const payload: any = {};
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('pe_') && k !== 'pe_current_user' && k !== 'pe_session_user') {
+              try {
+                payload[k] = JSON.parse(localStorage.getItem(k) || '""');
+              } catch {
+                payload[k] = localStorage.getItem(k);
+              }
+            }
+          }
+          fetch('/api/state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).catch(console.error);
+        }, 800);
       }
     };
 
@@ -103,8 +138,8 @@ export default function App() {
   if (syncState === 'loading') {
     return (
       <div className="flex flex-col h-screen items-center justify-center bg-slate-950 text-teal-400 font-sans" dir="rtl">
-         <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-         <p className="font-bold animate-pulse">در حال اتصال به سرور ابری کلادفلر...</p>
+        <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p className="font-bold animate-pulse">در حال اتصال به سرور ابری کلادفلر و بارگذاری اطلاعات...</p>
       </div>
     );
   }
@@ -151,11 +186,12 @@ function MainApp() {
     });
   };
 
+  // Session-isolated user state (per browser/device)
   const [currentUser, setCurrentUser] = useState<Employee | null>(() => {
-    const saved = localStorage.getItem('pe_current_user');
-    if (saved) {
+    const sessionSaved = sessionStorage.getItem('pe_session_user');
+    if (sessionSaved) {
       try {
-        const parsed = JSON.parse(saved);
+        const parsed = JSON.parse(sessionSaved);
         return sanitizeUser(parsed);
       } catch {
         return null;
@@ -163,6 +199,38 @@ function MainApp() {
     }
     return null;
   });
+
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
+    return browserNotifications.getPermissionStatus();
+  });
+
+  // Re-sync organizational data when cloud background poll updates localStorage
+  useEffect(() => {
+    const handleStorageUpdate = () => {
+      const savedCrit = localStorage.getItem('pe_criteria');
+      if (savedCrit) setCriteria(JSON.parse(savedCrit));
+      const savedProf = localStorage.getItem('pe_profiles');
+      if (savedProf) setProfiles(JSON.parse(savedProf));
+      const savedEmp = localStorage.getItem('pe_employees');
+      if (savedEmp) setEmployees(sanitizeEmployees(JSON.parse(savedEmp)));
+      const savedEval = localStorage.getItem('pe_evaluations');
+      if (savedEval) setEvaluations(JSON.parse(savedEval));
+    };
+
+    window.addEventListener('storage', handleStorageUpdate);
+    return () => window.removeEventListener('storage', handleStorageUpdate);
+  }, []);
+
+  const handleRequestNotification = async () => {
+    const granted = await browserNotifications.requestPermission();
+    setNotificationPermission(granted ? 'granted' : 'denied');
+    if (granted) {
+      browserNotifications.send({
+        title: 'اعلان‌های سامانه ارزیابی عملکرد فعال شد',
+        body: 'از این پس یادآوری‌های تاییدات و سررسید کارتابل‌ها را به صورت خودکار دریافت خواهید کرد.'
+      });
+    }
+  };
 
   const getTourStepsForRole = (userRole: string) => {
     if (userRole === 'employee') {
@@ -294,6 +362,34 @@ function MainApp() {
     notifyDataSaved();
   }, [evaluations, notifyDataSaved]);
 
+  // Check and alert pending tasks if user is logged in
+  useEffect(() => {
+    if (!currentUser) return;
+
+    if (currentUser.role === 'supervisor') {
+      const pendingEvals = evaluations.filter(ev => {
+        const emp = employees.find(e => e.id === ev.empId);
+        return emp && (emp.supervisorId === currentUser.id || !emp.supervisorId) && (ev.status === 'draft' || ev.status === 'pending');
+      });
+      if (pendingEvals.length > 0 && notificationPermission === 'granted') {
+        const lastAlert = sessionStorage.getItem('pe_last_notif_alert');
+        if (!lastAlert) {
+          browserNotifications.sendWorkflowDeadlineAlert('supervisor', pendingEvals.length, 'پایان ماه جاری');
+          sessionStorage.setItem('pe_last_notif_alert', 'true');
+        }
+      }
+    } else if (currentUser.role === 'employee') {
+      const myEval = evaluations.find(ev => ev.empId === currentUser.id);
+      if ((!myEval || myEval.scores.every(s => s.self === 0)) && notificationPermission === 'granted') {
+        const lastAlert = sessionStorage.getItem('pe_last_notif_emp_alert');
+        if (!lastAlert) {
+          browserNotifications.sendWorkflowDeadlineAlert('employee', 1);
+          sessionStorage.setItem('pe_last_notif_emp_alert', 'true');
+        }
+      }
+    }
+  }, [currentUser, evaluations, employees, notificationPermission]);
+
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('pe_current_user', JSON.stringify(currentUser));
@@ -321,16 +417,19 @@ function MainApp() {
   }, []);
 
   const handleLogin = (emp: Employee) => {
-    setCurrentUser(emp);
+    const sanitized = sanitizeUser(emp);
+    if (!sanitized) return;
+    sessionStorage.setItem('pe_session_user', JSON.stringify(sanitized));
+    setCurrentUser(sanitized);
     
     // Check if onboarding or tour is needed for this role
-    const hasSeenRoleTour = localStorage.getItem('pe_tour_completed_' + emp.id + '_' + emp.role);
-    const hasOnboarded = localStorage.getItem('pe_onboarded_' + emp.id);
+    const hasSeenRoleTour = localStorage.getItem('pe_tour_completed_' + sanitized.id + '_' + sanitized.role);
+    const hasOnboarded = localStorage.getItem('pe_onboarded_' + sanitized.id);
 
     if (!hasOnboarded) {
       setCurrentTab('onboarding');
     } else if (!hasSeenRoleTour) {
-      if (emp.role === 'employee') {
+      if (sanitized.role === 'employee') {
         setCurrentTab('my-evaluation');
       } else {
         setCurrentTab('dashboard');
@@ -339,7 +438,7 @@ function MainApp() {
         handleStartTour();
       }, 400);
     } else {
-      if (emp.role === 'employee') {
+      if (sanitized.role === 'employee') {
         setCurrentTab('my-evaluation');
       } else {
         setCurrentTab('dashboard');
@@ -348,6 +447,10 @@ function MainApp() {
   };
 
   const handleLogout = () => {
+    sessionStorage.removeItem('pe_session_user');
+    sessionStorage.removeItem('pe_last_notif_alert');
+    sessionStorage.removeItem('pe_last_notif_emp_alert');
+    localStorage.removeItem('pe_current_user');
     setCurrentUser(null);
     setCurrentTab('dashboard');
   };
@@ -355,15 +458,18 @@ function MainApp() {
   const handleSwitchUser = (empId: string) => {
     const emp = employees.find(e => e.id === empId);
     if (emp) {
-      setCurrentUser(emp);
+      const sanitized = sanitizeUser(emp);
+      if (!sanitized) return;
+      sessionStorage.setItem('pe_session_user', JSON.stringify(sanitized));
+      setCurrentUser(sanitized);
       
-      const hasSeenRoleTour = localStorage.getItem('pe_tour_completed_' + emp.id + '_' + emp.role);
-      const hasOnboarded = localStorage.getItem('pe_onboarded_' + emp.id);
+      const hasSeenRoleTour = localStorage.getItem('pe_tour_completed_' + sanitized.id + '_' + sanitized.role);
+      const hasOnboarded = localStorage.getItem('pe_onboarded_' + sanitized.id);
 
       if (!hasOnboarded) {
         setCurrentTab('onboarding');
       } else if (!hasSeenRoleTour) {
-        if (emp.role === 'employee') {
+        if (sanitized.role === 'employee') {
           setCurrentTab('my-evaluation');
         } else {
           setCurrentTab('dashboard');
@@ -372,7 +478,7 @@ function MainApp() {
           handleStartTour();
         }, 400);
       } else {
-        if (emp.role === 'employee') {
+        if (sanitized.role === 'employee') {
           setCurrentTab('my-evaluation');
         } else {
           setCurrentTab('dashboard');

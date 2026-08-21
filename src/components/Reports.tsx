@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   TrendingUp, 
   Download, 
@@ -15,6 +15,7 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { Evaluation, Employee, JobProfile, Criterion, CATEGORIES, getGrade, GRADE_DETAILS } from '../types';
+import RadarChartD3, { CompetencyDimensionData } from './RadarChartD3';
 
 interface ReportsProps {
   evaluations: Evaluation[];
@@ -93,6 +94,59 @@ export default function Reports({
       label: CATEGORIES[cat as keyof typeof CATEGORIES]
     };
   }).filter(c => c.count > 0);
+
+  const [selectedEmpForRadar, setSelectedEmpForRadar] = useState<string>('all');
+
+  const getRadarData = (): CompetencyDimensionData[] => {
+    const targetEvals = selectedEmpForRadar === 'all'
+      ? ratedEvals
+      : ratedEvals.filter(e => e.empId === selectedEmpForRadar);
+
+    const dims: {
+      key: 'K' | 'Q' | 'B' | 'S' | 'L';
+      label: string;
+      shortLabel: string;
+      sum: number;
+      count: number;
+      selfSum: number;
+      selfCount: number;
+      target: number;
+    }[] = [
+      { key: 'K', label: 'اهداف کمی (K)', shortLabel: 'K - کمی', sum: 0, count: 0, selfSum: 0, selfCount: 0, target: 4.2 },
+      { key: 'Q', label: 'کیفیت و دقت فنی (Q)', shortLabel: 'Q - کیفی', sum: 0, count: 0, selfSum: 0, selfCount: 0, target: 4.5 },
+      { key: 'B', label: 'رفتارهای سازمانی (B)', shortLabel: 'B - رفتاری', sum: 0, count: 0, selfSum: 0, selfCount: 0, target: 4.0 },
+      { key: 'S', label: 'ایمنی و ۵S (S)', shortLabel: 'S - ایمنی', sum: 0, count: 0, selfSum: 0, selfCount: 0, target: 4.8 },
+      { key: 'L', label: 'کار تیمی و انضباط (L)', shortLabel: 'L - رهبری', sum: 0, count: 0, selfSum: 0, selfCount: 0, target: 4.1 },
+    ];
+
+    targetEvals.forEach(ev => {
+      ev.scores.forEach(s => {
+        const crit = criteria.find(c => c.id === s.cid);
+        if (crit) {
+          const cat = crit.cat || 'K';
+          const dim = dims.find(d => d.key === cat) || dims[0];
+          if (s.value > 0) {
+            dim.sum += s.value;
+            dim.count += 1;
+          }
+          if (s.self && s.self > 0) {
+            dim.selfSum += s.self;
+            dim.selfCount += 1;
+          }
+        }
+      });
+    });
+
+    return dims.map(d => ({
+      key: d.key,
+      label: d.label,
+      shortLabel: d.shortLabel,
+      actual: d.count > 0 ? Math.round((d.sum / d.count) * 10) / 10 : 3.8,
+      target: d.target,
+      self: d.selfCount > 0 ? Math.round((d.selfSum / d.selfCount) * 10) / 10 : undefined,
+      description: d.label
+    }));
+  };
 
   // 3. Trigger CSV Download
   const handleExportCSV = () => {
@@ -234,6 +288,66 @@ export default function Reports({
           )}
         </div>
 
+      </div>
+
+      {/* Radar Chart 5-Dimension Competency Overview Card */}
+      <div className="bg-slate-800/30 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
+        <div className="flex justify-between items-center flex-wrap gap-3 border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2">
+            <Activity className="w-5 h-5 text-teal-400" />
+            <div>
+              <h3 className="text-sm font-bold text-slate-200">نمودار عنکبوتی تعادل ۵ گانه شایستگی (D3 Radar)</h3>
+              <p className="text-[11px] text-slate-400">تحلیل شکاف شایستگی میان عملکرد محقق‌شده و تارگت استاندارد تعالی</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400">فیلتر پرسنل:</span>
+            <select
+              value={selectedEmpForRadar}
+              onChange={(e) => setSelectedEmpForRadar(e.target.value)}
+              className="text-xs font-bold bg-slate-900 border border-slate-700 text-teal-300 px-3 py-1.5 rounded-xl focus:outline-none focus:ring-1 focus:ring-teal-500"
+            >
+              <option value="all">🏢 میانگین کل سازمان (اصفهان چالاک)</option>
+              {employees.map(emp => (
+                <option key={emp.id} value={emp.id}>👤 {emp.name} ({emp.unit})</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex flex-col md:flex-row items-center justify-around gap-6 pt-2">
+          <div className="flex justify-center">
+            <RadarChartD3 
+              data={getRadarData()}
+              width={360}
+              height={320}
+              theme="dark"
+            />
+          </div>
+
+          <div className="space-y-3 max-w-md text-xs">
+            <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-2">
+              <div className="flex items-center gap-2 text-teal-400 font-bold">
+                <div className="w-3 h-3 rounded-full bg-teal-500" />
+                <span>عملکرد واقعی ثبت‌شده</span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                برآیند نمرات سرپرست و خودارزیابی بر اساس مقیاس ۱ تا ۵ در شاخص‌های کمی، کیفی، رفتاری، ایمنی و رهبری.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-2">
+              <div className="flex items-center gap-2 text-indigo-400 font-bold">
+                <div className="w-3 h-3 rounded-full bg-indigo-500" />
+                <span>حد آستانه و استاندارد سازمانی</span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                حد مورد انتظار کارخانه جهت واجد شرایط بودن برای ارتقای رتبه و پاداش شایستگی سالانه.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Full Detail Results Table */}

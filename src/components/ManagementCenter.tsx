@@ -1835,30 +1835,32 @@ export default function ManagementCenter({
             </button>
           </div>
 
-          {/* OFFLINE STANDALONE HTML CARD */}
-          <div className="lg:col-span-12 bg-gradient-to-r from-slate-900 to-indigo-950/40 border border-indigo-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
+          {/* CLOUDFLARE CLOUD PERSISTENCE & SYNC STATUS */}
+          <div className="lg:col-span-12 bg-gradient-to-r from-slate-900 via-teal-950/30 to-slate-900 border border-teal-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
             <div className="space-y-2">
               <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-                  <Download className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <Database className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-black text-slate-100">صدور و دانلود نسخه تک‌فایل ۱۰۰٪ آفلاین (HTML)</h2>
-                  <p className="text-xs text-indigo-300 mt-0.5">قابل اجرا بر روی هر کامپیوتر یا فلش بدون نیاز به اینترنت و بدون نیاز به سرور</p>
+                  <h2 className="text-base font-black text-slate-100">پایگاه داده ابری متمرکز کلادفلر (Cloud Native Persistence)</h2>
+                  <p className="text-xs text-teal-300 mt-0.5">همگام‌سازی بلادرنگ داده‌ها بین کلیه سرپرستان، کارمندان و مدیریت ارشد</p>
                 </div>
               </div>
               <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
-                با دانلود این نسخه، یک فایل جامع <strong className="text-indigo-400">chalak_performance_offline_dashboard.html</strong> دریافت می‌کنید که تمامی داده‌ها، پرسنل، کارنامه‌ها و تحلیل‌ها را درون خود دارد و تنها با دبل‌کلیک در مرورگر اجرا می‌شود.
+                تمامی سوابق ارزیابی، احکام، فرمول‌های شایستگی و گردش کارها به طور آنی بر روی سرور ذخیره می‌شوند. هر کاربر با نقش و حساب مجزا وارد سامانه شده و تغییرات همزمان در کل کارخانه منعکس می‌گردد.
               </p>
             </div>
 
-            <button
-              onClick={handleExportOfflineHTML}
-              className="bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-slate-100 font-black py-3.5 px-6 rounded-2xl text-xs flex items-center justify-center gap-2.5 transition-all cursor-pointer shadow-lg shadow-indigo-500/20 shrink-0"
-            >
-              <Download className="w-4 h-4" />
-              <span>دانلود نسخه تک‌فایل آفلاین</span>
-            </button>
+            <div className="flex items-center gap-3">
+              <div className="px-4 py-3 rounded-2xl bg-slate-950/80 border border-teal-500/30 flex items-center gap-3 text-xs">
+                <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping" />
+                <div>
+                  <p className="font-bold text-slate-200">وضعیت اتصال ابری</p>
+                  <p className="text-[10px] text-emerald-400 font-mono">Cloud Sync: Connected (Active)</p>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* EXCEL / CSV BULK IMPORT */}

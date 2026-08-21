@@ -87,6 +87,112 @@ app.post('/api/state', (req, res) => {
   }
 });
 
+// API: AI-Powered Supervisor Feedback and Competency Improvement Suggestion
+app.post('/api/gemini/feedback', async (req, res) => {
+  try {
+    const { employeeName, jobTitle, supervisorComment, competencyScores, targetRole } = req.body;
+
+    const ai = getGeminiClient();
+
+    const prompt = `
+      شما یک مشاور ارشد توسعه شایستگی و مربیگری عملکرد منابع انسانی هستید.
+      متن نظرات و یادداشت‌های سرپرست در ارزیابی عملکرد همکار را تحلیل کرده و پیشنهادهای بازخورد حرفه‌ای و جملات بهبود عملکرد (Feedback Phrases) را بر اساس ۵ بعد شایستگی زیر تدوین نمایید:
+
+      اطلاعات ارزیابی:
+      - نام پرسنل: ${employeeName || 'همکار'}
+      - عنوان شغلی: ${jobTitle || 'پرسنل فنی/تولیدی'}
+      - نقش/جایگاه هدف: ${targetRole || 'توسعه در شغل فعلی'}
+      - متن خام نظر سرپرست: "${supervisorComment || 'نظری ثبت نشده است'}"
+      - وضعیت شایستگی‌های پنج‌گانه (امتیاز ۱ تا ۵):
+        * نتایج و شاخص‌های کمی (K): ${competencyScores?.K || '۳'}
+        * کیفیت و انطباق فرآیندی (Q): ${competencyScores?.Q || '۳'}
+        * رفتارهای حرفه‌ای و سازمانی (B): ${competencyScores?.B || '۳'}
+        * ایمنی، بهداشت و HSE (S): ${competencyScores?.S || '۳'}
+        * رهبری، مربیگری و کار تیمی (L): ${competencyScores?.L || '۳'}
+
+      دستورالعمل‌ها:
+      ۱. متن نظر سرپرست را به یک بازخورد مربی‌منشانه، محترمانه، انگیزشی و کاملاً شفاف بازنویسی کنید (refinedComment).
+      ۲. برای هر یک از ابعاد پنج‌گانه شایستگی، یک توصیه کلیدی مشخص برای ارتقا ارائه دهید.
+      ۳. حداقل ۳ پیشنهاد اقدام عملی (Action Plans) برای درج در برنامه رشد فردی (IDP) تهیه کنید.
+      ۴. نقاط قوت شاخص را مشخص کنید.
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.7-flash',
+      contents: prompt,
+      config: {
+        systemInstruction: "You are a master corporate HR feedback specialist and executive coach. Return structured JSON in fluent Persian.",
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            refinedComment: {
+              type: Type.STRING,
+              description: "متن بازنویسی شده نظر سرپرست با لحن مربی‌منشانه، حرفه‌ای و رشددهنده"
+            },
+            competencyFeedback: {
+              type: Type.OBJECT,
+              properties: {
+                quantitative: { type: Type.STRING, description: "پیشنهاد بهبود بعد نتایج کمی (K)" },
+                quality: { type: Type.STRING, description: "پیشنهاد بهبود بعد کیفیت و دقت (Q)" },
+                behavioral: { type: Type.STRING, description: "پیشنهاد بهبود بعد رفتارهای سازمانی (B)" },
+                safetyHse: { type: Type.STRING, description: "پیشنهاد بهبود بعد ایمنی و HSE (S)" },
+                leadershipTeam: { type: Type.STRING, description: "پیشنهاد بهبود بعد رهبری و کار تیمی (L)" }
+              },
+              required: ["quantitative", "quality", "behavioral", "safetyHse", "leadershipTeam"]
+            },
+            strengths: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "نقاط قوت برجسته"
+            },
+            actionPlan: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "اقدامات عملیاتی بهبود عملکرد"
+            }
+          },
+          required: ["refinedComment", "competencyFeedback", "strengths", "actionPlan"]
+        }
+      }
+    });
+
+    const textResult = response.text;
+    if (!textResult) {
+      throw new Error("No response from Gemini API");
+    }
+
+    const parsed = JSON.parse(textResult.trim());
+    return res.json(parsed);
+
+  } catch (error: any) {
+    console.error("Gemini Feedback API Error:", error);
+    // Graceful fallback
+    const { supervisorComment = '' } = req.body || {};
+    return res.json({
+      refinedComment: supervisorComment 
+        ? `همکار محترم در طول دوره ارزیابی تلاش‌های موثری داشته است. با تمرکز بیشتر بر بهبود دقت فرآیندی و رعایت استانداردهای کیفیت و ایمنی، پتانسیل دستیابی به نتایج برجسته‌تر کاملاً مشهود است.`
+        : `عملکرد کلی همکار رضایت‌بخش است و با هدف‌گذاری دقیق‌تر در شاخص‌های کمی و انضباط فرآیندی، رشد چشمگیری محقق خواهد شد.`,
+      competencyFeedback: {
+        quantitative: "حفظ راندمان تولید و تلاش جهت بهینه‌سازی زمان‌بندی تحویل",
+        quality: "دقت مضاعف در کنترل کیفیت قطعات و کاهش دوباره‌کاری",
+        behavioral: "تقویت تعامل سازنده با اعضای تیم و پذیرش بازخوردها",
+        safetyHse: "رعایت کامل دستورالعمل‌های حفاظت فردی و HSE در محیط کار",
+        leadershipTeam: "مشارکت فعال در انتقال تجربیات فنی به نیروهای جدید"
+      },
+      strengths: [
+        "پایبندی به زمان‌بندی کاری و مسئولیت‌پذیری",
+        "مهارت فنی در انجام وظایف محوله"
+      ],
+      actionPlan: [
+        "شرکت در کارگاه بازآموزی فرآیندهای کیفی و HSE",
+        "تعریف یک پروژه بهبود کوچک در ایستگاه کاری برای دوره آتی"
+      ],
+      isFallback: true
+    });
+  }
+});
+
 // API: AI-Powered Performance Coaching Feedback Generator (RTL Persian-adapted)
 app.post('/api/gemini/coaching', async (req, res) => {
   try {

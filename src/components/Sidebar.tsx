@@ -25,7 +25,10 @@ import {
   LockKeyhole,
   CheckCircle,
   Database,
-  GitFork
+  GitFork,
+  Bell,
+  Compass,
+  Sparkles
 } from 'lucide-react';
 import { Employee, UserRole } from '../types';
 
@@ -268,6 +271,16 @@ export default function Sidebar({
               </p>
             </div>
           </div>
+
+          {/* Interactive Tour & Guidance button */}
+          <button
+            type="button"
+            onClick={onStartTour}
+            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 border border-teal-500/30 text-xs font-black transition-all cursor-pointer shadow-sm"
+          >
+            <Compass className="w-4 h-4 animate-spin-slow" />
+            <span>شروع تور و راهنمای سیستم</span>
+          </button>
 
           {/* Quick Toolbar: Theme & Logout */}
           <div className="flex items-center justify-between pt-2 border-t border-slate-800/30">

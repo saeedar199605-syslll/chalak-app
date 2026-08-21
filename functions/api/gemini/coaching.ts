@@ -6,7 +6,7 @@ export async function onRequestPost(context) {
 
     const apiKey = env.GEMINI_API_KEY;
     if (!apiKey) {
-       return new Response(JSON.stringify({ error: "کلید API هوش مصنوعی در سرور یافت نشد." }), { status: 500 });
+       return new Response(JSON.stringify({ error: "کلید API هوش مصنوعی یافت نشد." }), { status: 500 });
     }
 
     const prompt = `
@@ -21,7 +21,7 @@ export async function onRequestPost(context) {
 
       یادداشت سرپرست: "${note || 'ندارد'}"
 
-      خروجی باید دقیقاً یک JSON با فیلدهای زیر باشد (بدون کد بلاک اضافی):
+      خروجی باید دقیقاً یک JSON با فیلدهای زیر باشد:
       {"strengths": ["..."], "developmentAreas": ["..."], "actionItems": ["..."], "summary": "..."}
     `;
 
@@ -39,22 +39,15 @@ export async function onRequestPost(context) {
     });
 
     const data = await response.json();
-    
-    if (data.error) {
-        throw new Error(data.error.message);
-    }
+    if (data.error) throw new Error(data.error.message);
 
     const textResult = data.candidates[0].content.parts[0].text;
-    
     let cleanedResult = textResult.trim();
-    if (cleanedResult.startsWith('```json')) {
-        cleanedResult = cleanedResult.replace('```json', '').replace('```', '').trim();
-    }
+    if (cleanedResult.startsWith('```json')) cleanedResult = cleanedResult.replace('```json', '').replace('```', '').trim();
 
     return new Response(JSON.stringify({ feedback: JSON.parse(cleanedResult) }), {
       headers: { 'Content-Type': 'application/json' }
     });
-
   } catch (error) {
     return new Response(JSON.stringify({ error: 'خطا در ارتباط با هوش مصنوعی', details: error.message }), { status: 500 });
   }

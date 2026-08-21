@@ -32,6 +32,7 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import ExcelIntegrationCenter from './ExcelIntegrationCenter';
+import AIFeedbackAssistant from './AIFeedbackAssistant';
 import { 
   Evaluation, 
   Employee, 
@@ -742,7 +743,7 @@ export default function Evaluations({
             <hr className="border-slate-800" />
 
             {/* Conversation/Coaching summary note */}
-            <div>
+            <div className="space-y-3">
               <label className="block text-xs font-semibold text-slate-400 mb-1.5">خلاصه مربیگری و تفاهم توسعه فردی (مذاکره حضوری سرپرست و کارمند)</label>
               <textarea
                 disabled={activeEval.status === 'locked'}
@@ -751,6 +752,27 @@ export default function Evaluations({
                 onChange={(e) => handleNoteChange(e.target.value)}
                 className="w-full h-24 bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500 resize-none"
               />
+
+              {/* AI Feedback Assistant for Supervisor text refinement & coaching suggestions */}
+              {activeEval.status !== 'locked' && (
+                <div className="pt-2">
+                  <AIFeedbackAssistant
+                    supervisorComment={activeEval.note || ''}
+                    employeeName={activeEmp?.name || 'همکار گرامی'}
+                    jobTitle={activeProf?.title || 'عنوان شغلی'}
+                    competencyScores={{
+                      K: activeEval.scores.find(s => criteria.find(c => c.id === s.cid)?.cat === 'K')?.value || 3.5,
+                      Q: activeEval.scores.find(s => criteria.find(c => c.id === s.cid)?.cat === 'Q')?.value || 4.0,
+                      B: activeEval.scores.find(s => criteria.find(c => c.id === s.cid)?.cat === 'B')?.value || 3.8,
+                      S: activeEval.scores.find(s => criteria.find(c => c.id === s.cid)?.cat === 'S')?.value || 4.5,
+                      L: activeEval.scores.find(s => criteria.find(c => c.id === s.cid)?.cat === 'L')?.value || 3.5
+                    }}
+                    onApplyFeedback={(refinedText) => {
+                      handleNoteChange(refinedText);
+                    }}
+                  />
+                </div>
+              )}
             </div>
           </div>
 

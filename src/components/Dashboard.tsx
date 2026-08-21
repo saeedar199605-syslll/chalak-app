@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Criterion, JobProfile, Employee, Evaluation, CYCLE_STEPS, getGrade, GRADE_DETAILS } from '../types';
 import SmartGrowthAnalytics from './SmartGrowthAnalytics';
+import RadarChartD3, { CompetencyDimensionData } from './RadarChartD3';
 
 interface DashboardProps {
   criteria: Criterion[];
@@ -153,6 +154,59 @@ export default function Dashboard({
   const avgPerformance = finalEvals.length
     ? Math.round(finalEvals.reduce((sum, e) => sum + calculateScore(e), 0) / finalEvals.length * 10) / 10
     : 0;
+
+  const [radarEmpId, setRadarEmpId] = useState<string>('all');
+
+  const getCompetencyRadarData = (): CompetencyDimensionData[] => {
+    const relevantEvals = radarEmpId === 'all' 
+      ? evaluations 
+      : evaluations.filter(e => e.empId === radarEmpId);
+
+    const dims: {
+      key: 'K' | 'Q' | 'B' | 'S' | 'L';
+      label: string;
+      shortLabel: string;
+      count: number;
+      sum: number;
+      selfSum: number;
+      selfCount: number;
+      target: number;
+    }[] = [
+      { key: 'K', label: 'اهداف کمی و خروجی', shortLabel: 'K - کمی', count: 0, sum: 0, selfSum: 0, selfCount: 0, target: 4.2 },
+      { key: 'Q', label: 'کیفیت و انطباق استانداردها', shortLabel: 'Q - کیفی', count: 0, sum: 0, selfSum: 0, selfCount: 0, target: 4.5 },
+      { key: 'B', label: 'رفتارهای سازمانی و اخلاق حرفه‌ای', shortLabel: 'B - رفتاری', count: 0, sum: 0, selfSum: 0, selfCount: 0, target: 4.0 },
+      { key: 'S', label: 'ایمنی، بهداشت و ۵S کارگاهی', shortLabel: 'S - ایمنی', count: 0, sum: 0, selfSum: 0, selfCount: 0, target: 4.8 },
+      { key: 'L', label: 'رهبری، مربیگری و کار تیمی', shortLabel: 'L - رهبری', count: 0, sum: 0, selfSum: 0, selfCount: 0, target: 4.1 },
+    ];
+
+    relevantEvals.forEach(ev => {
+      ev.scores.forEach(s => {
+        const crit = criteria.find(c => c.id === s.cid);
+        if (crit) {
+          const cat = crit.cat || 'K';
+          const dim = dims.find(d => d.key === cat) || dims[0];
+          if (s.value > 0) {
+            dim.sum += s.value;
+            dim.count += 1;
+          }
+          if (s.self && s.self > 0) {
+            dim.selfSum += s.self;
+            dim.selfCount += 1;
+          }
+        }
+      });
+    });
+
+    return dims.map(d => ({
+      key: d.key,
+      label: d.label,
+      shortLabel: d.shortLabel,
+      actual: d.count > 0 ? Math.round((d.sum / d.count) * 10) / 10 : (radarEmpId === 'all' ? 3.8 : 3.5),
+      target: d.target,
+      self: d.selfCount > 0 ? Math.round((d.selfSum / d.selfCount) * 10) / 10 : undefined,
+      description: d.label
+    }));
+  };
 
   // Grade Distribution
   const distribution = { A: 0, B: 0, C: 0, D: 0, E: 0 };
@@ -324,6 +378,47 @@ export default function Dashboard({
                 <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
                   <div className="h-full bg-teal-500" style={{ width: `${evaluations.length ? (completedEvals.length / evaluations.length) * 100 : 0}%` }} />
                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Competency 5-Dimension D3 Radar Chart */}
+          <div className="bg-slate-800/30 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-lg">
+            <div className="flex justify-between items-center flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-teal-400" />
+                <h3 className="text-sm font-bold text-slate-200">نمودار عنکبوتی ۵ بُعد شایستگی (D3)</h3>
+              </div>
+              
+              <select
+                value={radarEmpId}
+                onChange={(e) => setRadarEmpId(e.target.value)}
+                className="text-[11px] font-bold bg-slate-900 border border-slate-700 text-teal-300 px-2.5 py-1 rounded-xl focus:outline-none focus:ring-1 focus:ring-teal-500"
+              >
+                <option value="all">🏢 میانگین کل سازمان (اصفهان چالاک)</option>
+                {employees.map(emp => (
+                  <option key={emp.id} value={emp.id}>👤 {emp.name} ({emp.unit})</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex justify-center py-2">
+              <RadarChartD3 
+                data={getCompetencyRadarData()}
+                width={320}
+                height={290}
+                theme="dark"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-[10px] bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80">
+              <div className="flex items-center gap-1.5 text-teal-400 font-bold">
+                <span className="w-2.5 h-2.5 rounded-full bg-teal-500" />
+                <span>عملکرد واقعی ارزیابی‌شده</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-indigo-400 font-bold">
+                <span className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
+                <span>تارگت و استاندارد هدف</span>
               </div>
             </div>
           </div>
