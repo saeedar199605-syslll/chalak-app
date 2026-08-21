@@ -1,0 +1,838 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState } from 'react';
+import { 
+  ClipboardCheck, 
+  Plus, 
+  ChevronLeft, 
+  Sparkles, 
+  ShieldCheck, 
+  FileText, 
+  AlertTriangle, 
+  Lock, 
+  Unlock, 
+  Trash2,
+  Brain,
+  Award,
+  BookOpen,
+  Send,
+  Loader2,
+  CheckCircle2
+} from 'lucide-react';
+import { 
+  Evaluation, 
+  Employee, 
+  JobProfile, 
+  Criterion, 
+  PERFORMANCE_SCALE, 
+  NEED_DOCUMENT_SCORES, 
+  SCALE_FACTOR, 
+  getGrade, 
+  GRADE_DETAILS,
+  CYCLE_STEPS
+} from '../types';
+
+const generateLocalCoachingFeedback = (
+  employeeName: string,
+  jobTitle: string,
+  period: string,
+  scores: any[],
+  note: string,
+  criteria: Criterion[]
+): {
+  strengths: string[];
+  developmentAreas: string[];
+  actionItems: string[];
+  summary: string;
+} => {
+  const strengthsScores = scores.filter(s => s.value >= 4);
+  const improvementsScores = scores.filter(s => s.value > 0 && s.value <= 3);
+
+  const strengthsList: string[] = [];
+  strengthsScores.forEach(s => {
+    const crit = criteria.find(c => c.id === s.cid);
+    if (crit) {
+      strengthsList.push(`شاخص ${crit.name} (امتیاز ${s.value}): تخصص بالا و دقت فوق‌العاده همکار در این بخش مورد تقدیر است.`);
+    }
+  });
+  if (strengthsList.length === 0) {
+    strengthsList.push('موردی با رتبه برتر متمایز یافت نشد. تلاش در جهت ارتقای خروجی توصیه می‌شود.');
+  }
+
+  const improvementsList: string[] = [];
+  improvementsScores.forEach(s => {
+    const crit = criteria.find(c => c.id === s.cid);
+    if (crit) {
+      improvementsList.push(`شاخص ${crit.name} (امتیاز ${s.value}): نیازمند مانیتورینگ دقیق‌تر فرآیند، بازآموزی چک‌لیست SOP و تمرکز روی کاهش خطا.`);
+    }
+  });
+  if (improvementsList.length === 0) {
+    improvementsList.push('کل شاخص‌ها در حد استاندارد و بالاتر هستند. توصیه بر پایداری عملکرد است.');
+  }
+
+  const actionItemsList = [
+    'شرکت در کلاس فشرده بازآموزی استانداردهای کیفی اصفهان چالاک.',
+    'تنظیم چک‌لیست پایش روزانه با همکار سرپرست ایستگاه کاری.',
+    'ثبت و انتقال داده‌های دقیق توقفات دستگاه در سامانه MES کارخانه.'
+  ];
+
+  const summary = `بر اساس ارزیابی عملکرد همکار ارجمند، ${employeeName} در جایگاه شغلی ${jobTitle} برای دوره ${period}، به طور کلی شایستگی و انضباط فرآیندی ایشان مطلوب ارزیابی گردید. تمرکز بر فرصت‌های بهبود می‌تواند مسیر پیشرفت شغلی و رشد شایستگی را به طور کامل هموار سازد. ${note ? `توضیح مربی خط: "${note}"` : ''}`;
+
+  return {
+    strengths: strengthsList,
+    developmentAreas: improvementsList,
+    actionItems: actionItemsList,
+    summary
+  };
+};
+
+interface EvaluationsProps {
+  evaluations: Evaluation[];
+  employees: Employee[];
+  profiles: JobProfile[];
+  criteria: Criterion[];
+  onAddEvaluation: (empId: string, period: string) => void;
+  onUpdateEvaluation: (id: string, ev: Evaluation) => void;
+  onDeleteEvaluation: (id: string) => void;
+  activeEvalId: string | null;
+  onSetActiveEval: (id: string | null) => void;
+}
+
+export default function Evaluations({
+  evaluations,
+  employees,
+  profiles,
+  criteria,
+  onAddEvaluation,
+  onUpdateEvaluation,
+  onDeleteEvaluation,
+  activeEvalId,
+  onSetActiveEval
+}: EvaluationsProps) {
+  const [isNewModalOpen, setIsNewModalOpen] = useState(false);
+  const [newEmpId, setNewEmpId] = useState('');
+  const [newPeriod, setNewPeriod] = useState('نیمه اول ۱۴۰۵');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // Active evaluation form states
+  const activeEval = evaluations.find(e => e.id === activeEvalId);
+  const activeEmployee = employees.find(emp => emp?.id === activeEval?.empId);
+  const activeProfile = profiles.find(p => p?.id === activeEval?.profileId);
+
+  // Triggering the add modal
+  const handleOpenNewModal = () => {
+    if (employees.length === 0) {
+      alert('لطفاً ابتدا از زبانه مدیریت پرسنل، اقدام به تعریف پرونده‌های همکاران کنید.');
+      return;
+    }
+    setNewEmpId(employees[0].id);
+    setNewPeriod('نیمه اول ۱۴۰۵');
+    setIsNewModalOpen(true);
+  };
+
+  const handleCreateEvaluation = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEmpId || !newPeriod) return;
+
+    // Check if employee has a profile
+    const emp = employees.find(x => x.id === newEmpId);
+    if (!emp || !emp.profileId) {
+      alert('این همکار فاقد الگوی شایستگی متناظر است. ابتدا باید پروفایل شغلی او را مشخص کنید.');
+      return;
+    }
+
+    // Check if an evaluation already exists for this employee in this period
+    const exists = evaluations.some(ev => ev.empId === newEmpId && ev.period === newPeriod);
+    if (exists) {
+      alert('ارزیابی عملکرد این همکار برای دوره مذکور پیش از این ایجاد شده است.');
+      return;
+    }
+
+    onAddEvaluation(newEmpId, newPeriod);
+    setIsNewModalOpen(false);
+  };
+
+  const handleScoreChange = (scoreIndex: number, val: number) => {
+    if (!activeEval || activeEval.status === 'locked') return;
+    const updatedScores = [...activeEval.scores];
+    updatedScores[scoreIndex] = { ...updatedScores[scoreIndex], value: val };
+    onUpdateEvaluation(activeEval.id, { ...activeEval, scores: updatedScores });
+  };
+
+  const handleSelfScoreChange = (scoreIndex: number, val: number) => {
+    if (!activeEval || activeEval.status === 'locked') return;
+    const updatedScores = [...activeEval.scores];
+    updatedScores[scoreIndex] = { ...updatedScores[scoreIndex], self: val };
+    onUpdateEvaluation(activeEval.id, { ...activeEval, scores: updatedScores });
+  };
+
+  const handleDocChange = (scoreIndex: number, docVal: string) => {
+    if (!activeEval || activeEval.status === 'locked') return;
+    const updatedScores = [...activeEval.scores];
+    updatedScores[scoreIndex] = { ...updatedScores[scoreIndex], doc: docVal };
+    onUpdateEvaluation(activeEval.id, { ...activeEval, scores: updatedScores });
+  };
+
+  const handleNoteChange = (noteVal: string) => {
+    if (!activeEval || activeEval.status === 'locked') return;
+    onUpdateEvaluation(activeEval.id, { ...activeEval, note: noteVal });
+  };
+
+  // Generate AI Coaching Feedback using Gemini API
+  const handleGenerateAIFeedback = async () => {
+    if (!activeEval) return;
+
+    // Set loading
+    onUpdateEvaluation(activeEval.id, { ...activeEval, aiLoading: true });
+
+    try {
+      // Gather scored items to send to the backend
+      const formattedScores = activeEval.scores.map(s => {
+        const crit = criteria.find(c => c.id === s.cid);
+        return {
+          code: crit?.code || '',
+          name: crit?.name || '',
+          category: crit ? crit.cat : '',
+          weight: s.weight,
+          value: s.value,
+          self: s.self,
+          doc: s.doc || ''
+        };
+      });
+
+      const response = await fetch('/api/gemini/coaching', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeName: activeEmployee?.name || '',
+          jobTitle: activeProfile?.title || '',
+          period: activeEval.period,
+          scores: formattedScores,
+          note: activeEval.note || ''
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('اختلال در برقراری ارتباط با موتور هوش مصنوعی.');
+      }
+
+      const data = await response.json();
+      onUpdateEvaluation(activeEval.id, { 
+        ...activeEval, 
+        aiFeedback: data.feedback,
+        aiLoading: false 
+      });
+    } catch (err) {
+      console.warn('Backend API connection failed. Generating clean local coaching feedback...', err);
+      // Generate clean heuristic local fallback
+      const fallbackFeedback = generateLocalCoachingFeedback(
+        activeEmployee?.name || 'همکار گرامی',
+        activeProfile?.title || 'شاغل تخصصی',
+        activeEval.period,
+        activeEval.scores,
+        activeEval.note || '',
+        criteria
+      );
+      
+      onUpdateEvaluation(activeEval.id, { 
+        ...activeEval, 
+        aiFeedback: fallbackFeedback,
+        aiLoading: false 
+      });
+    }
+  };
+
+  // Calculations for current evaluation
+  const calculateScore = (ev: Evaluation) => {
+    const scoredItems = ev.scores.filter(s => s.value > 0);
+    if (!scoredItems.length) return 0;
+    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
+    if (totalWeight === 0) return 0;
+    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
+    const avg5 = weightedSum / totalWeight;
+    return Math.round(avg5 * SCALE_FACTOR * 10) / 10; // scaled to 100
+  };
+
+  const finalScore = activeEval ? calculateScore(activeEval) : 0;
+  const grade = finalScore > 0 ? getGrade(finalScore) : null;
+  const gradeConfig = grade ? GRADE_DETAILS[grade] : null;
+
+  // Validation rules for locking/finalizing:
+  // 1. All scores must be rated (>0)
+  // 2. Outlier scores (1, 2, 5) must have a non-empty document justification
+  const isFormComplete = activeEval?.scores.every(s => s.value > 0);
+  const isDocSatisfied = activeEval?.scores.every(s => {
+    if (NEED_DOCUMENT_SCORES.includes(s.value)) {
+      return s.doc && s.doc.trim().length > 5; // Must have at least 5 chars of rationale
+    }
+    return true;
+  });
+
+  const handleFinalizeAndLock = () => {
+    if (!activeEval) return;
+    if (!isFormComplete) {
+      alert('خطا: ثبت نمره برای تمامی معیارهای شایستگی ارزیابی الزامی است.');
+      return;
+    }
+    if (!isDocSatisfied) {
+      alert('خطا: طبق مقررات، جهت جلوگیری از سوگیری، برای نمرات رتبه خاص (۱، ۲ و ۵) ثبت حداقل ۵ کاراکتر مستند و توضیح توجیهی الزامی است.');
+      return;
+    }
+
+    if (confirm('آیا از قفل و نهایی‌سازی این ارزیابی اطمینان دارید؟ پس از این مرحله، ویرایش نمرات دیگر مقدور نخواهد بود.')) {
+      onUpdateEvaluation(activeEval.id, { ...activeEval, status: 'locked' });
+    }
+  };
+
+  return (
+    <div className="space-y-6 text-right" dir="rtl">
+      {/* 1. MAIN LIST VIEW */}
+      {!activeEvalId ? (
+        <>
+          <div className="flex justify-between items-start flex-wrap gap-4">
+            <div>
+              <h1 className="text-2xl font-black text-slate-100 tracking-tight">سنجش و ارزیابی عملکرد</h1>
+              <p className="text-sm text-slate-400 mt-1">
+                تکمیل فرم‌های خودارزیابی و ارزیابی سرپرست • مجهز به سیستم مربیگری اختصاصی و هوشمند هوش مصنوعی
+              </p>
+            </div>
+            <button
+              onClick={handleOpenNewModal}
+              className="bg-teal-500 hover:bg-teal-600 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-teal-500/10 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>شروع ارزیابی جدید</span>
+            </button>
+          </div>
+
+          {/* Guidelines on bias and justifications */}
+          <div className="bg-indigo-500/10 border border-indigo-500/20 text-indigo-200 p-4 rounded-2xl text-xs leading-relaxed">
+            <h3 className="font-bold flex items-center gap-2 text-indigo-300">
+              <ShieldCheck className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span>مقررات ضدسوگیری و کنترل کیفیت ارزیابی (Anti-Bias Rules)</span>
+            </h3>
+            <p className="text-slate-300 mt-1.5">
+              جهت ارتقای کیفیت ارزیابی‌ها و جلوگیری از پدیده تورم نمره‌ای، ثبت ارزیابی برای هر شاخص در مقیاس ۱ تا ۵ انجام می‌شود. نمرات <span className="text-red-400 font-bold">۱ (غیرقابل قبول)</span>، <span className="text-orange-400 font-bold">۲ (نیازمند بهبود)</span> و <span className="text-emerald-400 font-bold">۵ (فراتر از انتظار)</span> امتیازات خاص تلقی شده و ثبت لینک یا توصیف مستندات توجیهی برای نهایی‌سازی الزامی است. بدون مستند توجیهی، ارزیابی در حالت پیش‌نویس قفل خواهد ماند.
+            </p>
+          </div>
+
+          {/* Evaluations Table List */}
+          <div className="bg-slate-800/20 border border-slate-800/80 rounded-2xl overflow-hidden">
+            {evaluations.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-slate-300">
+                  <thead>
+                    <tr className="bg-slate-900/40 border-b border-slate-800 text-slate-400 font-bold">
+                      <th className="p-4 text-right">پرسنل</th>
+                      <th className="p-4 text-right">عنوان شغلی و واحد</th>
+                      <th className="p-4 text-center">دوره ارزیابی</th>
+                      <th className="p-4 text-center">نمره (۱۰۰)</th>
+                      <th className="p-4 text-center">رتبه عملکرد</th>
+                      <th className="p-4 text-center">پشتیبانی مربیگری AI</th>
+                      <th className="p-4 text-center">وضعیت ارزیابی</th>
+                      <th className="p-4 text-left">عملیات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/50">
+                    {evaluations.map((ev) => {
+                      const emp = employees.find(e => e.id === ev.empId);
+                      const prof = profiles.find(p => p.id === ev.profileId);
+                      const scoreVal = calculateScore(ev);
+                      const evGrade = scoreVal > 0 ? getGrade(scoreVal) : null;
+                      const gradeDetails = evGrade ? GRADE_DETAILS[evGrade] : null;
+
+                      return (
+                        <tr key={ev.id} className="hover:bg-slate-800/10 transition-colors">
+                          <td className="p-4 font-semibold text-slate-200">{emp?.name || 'نامشخص'}</td>
+                          <td className="p-4">
+                            <div className="font-medium text-slate-300">{prof?.title || 'نامشخص'}</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">بخش: {emp?.unit || 'نامشخص'}</div>
+                          </td>
+                          <td className="p-4 text-center text-slate-400 font-mono">{ev.period}</td>
+                          <td className="p-4 text-center font-bold text-slate-100 text-sm">
+                            {scoreVal > 0 ? `${scoreVal}٪` : '—'}
+                          </td>
+                          <td className="p-4 text-center">
+                            {evGrade && gradeDetails ? (
+                              <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold bg-${gradeDetails.color}-500/10 text-${gradeDetails.color}-300 border border-${gradeDetails.color}-500/10`}>
+                                {evGrade} — {gradeDetails.label}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">—</span>
+                            )}
+                          </td>
+                          <td className="p-4 text-center">
+                            {ev.aiFeedback ? (
+                              <span className="px-2 py-0.5 bg-purple-500/10 text-purple-300 rounded font-semibold text-[10px] border border-purple-500/20">
+                                ✨ دارای برنامه اقدام
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">سردستی</span>
+                            )}
+                          </td>
+                          <td className="p-4 text-center">
+                            {ev.status === 'locked' ? (
+                              <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2 py-1 rounded text-[10px]">
+                                🔒 نهایی شده
+                              </span>
+                            ) : ev.status === 'calibrated' ? (
+                              <span className="text-indigo-400 font-bold bg-indigo-500/10 px-2 py-1 rounded text-[10px]">
+                                ⚖️ کالیبره
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 font-medium bg-slate-800 px-2 py-1 rounded text-[10px]">
+                                ✏️ پیش‌نویس
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4 text-left">
+                            <div className="flex gap-2 justify-end items-center">
+                              <button
+                                onClick={() => onSetActiveEval(ev.id)}
+                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 font-semibold rounded-lg text-[11px] transition-all cursor-pointer"
+                              >
+                                {ev.status === 'locked' ? 'مشاهده فرم' : 'تکمیل فرم'}
+                              </button>
+                              
+                              {ev.status !== 'locked' && (
+                                <button
+                                  onClick={() => {
+                                    if (confirm('آیا از حذف این ارزیابی پیش‌نویس مطمئن هستید؟')) {
+                                      onDeleteEvaluation(ev.id);
+                                    }
+                                  }}
+                                  className="p-1.5 text-slate-500 hover:text-red-400 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                                  title="حذف ارزیابی"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="py-16 text-center text-slate-500 bg-slate-850/5 rounded-2xl border border-dashed border-slate-800">
+                <ClipboardCheck className="w-12 h-12 text-slate-700 mx-auto mb-3" />
+                <p className="text-base font-bold">هیچ فرآیند ارزیابی ایجاد نشده است</p>
+                <p className="text-xs mt-1">با کلیک روی دکمه شروع ارزیابی جدید، اولین گام ثبت ارزیابی را بردارید.</p>
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        /* 2. ACTIVE EVALUATION INTERACTIVE FORM */
+        <div className="space-y-6">
+          {/* Header Action bar */}
+          <div className="flex justify-between items-center bg-slate-800/20 border border-slate-800/60 p-4 rounded-2xl">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-teal-400 text-sm">
+                {activeEmployee?.name[0]}
+              </div>
+              <div>
+                <h2 className="text-base font-black text-slate-100">{activeEmployee?.name}</h2>
+                <p className="text-xs text-slate-400 mt-0.5">{activeProfile?.title} • دوره: {activeEval.period}</p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => onSetActiveEval(null)}
+              className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              بازگشت به ارزیابی‌ها
+            </button>
+          </div>
+
+          {/* Step Progress Visual */}
+          <div className="bg-slate-800/30 border border-slate-800 rounded-2xl p-4">
+            <div className="flex justify-between text-[11px] mb-2 font-bold text-slate-400">
+              <span>گام جاری فرآیند ارزیابی کارکنان:</span>
+              <span className="text-teal-400">
+                {activeEval.status === 'locked' ? 'گام ۶: ابلاغ و گفت‌وگو' : activeEval.status === 'calibrated' ? 'گام ۵: کالیبراسیون' : 'گام ۴: ارزیابی نهایی سرپرست'}
+              </span>
+            </div>
+            
+            <div className="grid grid-cols-6 gap-1 text-[10px] text-center font-medium">
+              {CYCLE_STEPS.map((step) => {
+                const isDone = activeEval.status === 'locked' || 
+                             (activeEval.status === 'calibrated' && step.step <= 5) ||
+                             (activeEval.status === 'draft' && step.step <= 4);
+                return (
+                  <div 
+                    key={step.step}
+                    className={`py-2 px-1 rounded-md border ${
+                      isDone 
+                        ? 'bg-teal-500/10 border-teal-500/20 text-teal-400 font-bold' 
+                        : 'bg-slate-900/40 border-slate-800 text-slate-600'
+                    }`}
+                  >
+                    <div>{step.step}</div>
+                    <div className="truncate text-[8px] md:text-[10px] mt-0.5">{step.title.split(' ')[0]}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Form Matrix Table */}
+          <div className="bg-slate-800/20 border border-slate-800 rounded-2xl overflow-hidden p-5 space-y-4">
+            <h3 className="text-sm font-bold text-slate-200">ماتریس ارزش‌دهی سنجه‌ها</h3>
+
+            <div className="space-y-4">
+              {activeEval.scores.map((score, idx) => {
+                const crit = criteria.find(c => c.id === score.cid);
+                if (!crit) return null;
+
+                const isSpecial = NEED_DOCUMENT_SCORES.includes(score.value);
+                const hasDoc = score.doc && score.doc.trim().length > 5;
+                const docRequiredButEmpty = isSpecial && !hasDoc;
+
+                return (
+                  <div key={score.cid} className="bg-slate-900/40 border border-slate-800/60 rounded-xl p-4 space-y-3.5 hover:border-slate-700/50 transition-all">
+                    {/* Index header */}
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="flex gap-2 items-start">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono shrink-0 mt-0.5 ${
+                          crit.cat === 'K' ? 'bg-blue-500/10 text-blue-300' :
+                          crit.cat === 'Q' ? 'bg-amber-500/10 text-amber-300' :
+                          crit.cat === 'B' ? 'bg-purple-500/10 text-purple-300' :
+                          crit.cat === 'S' ? 'bg-red-500/10 text-red-300' :
+                          'bg-emerald-500/10 text-emerald-300'
+                        }`}>
+                          {crit.code}
+                        </span>
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-200 flex items-center gap-1.5 flex-wrap">
+                            <span>{crit.name}</span>
+                            <span className="text-[10px] text-slate-400 bg-slate-850 px-1.5 py-0.5 rounded">وزن شاخص: {score.weight}٪</span>
+                          </h4>
+                          <p className="text-[10px] text-slate-400 mt-1 leading-relaxed max-w-3xl">{crit.def}</p>
+                          {crit.source && (
+                            <p className="text-[9px] text-slate-500 mt-0.5 font-mono">منبع داده رسمی: {crit.source} • سنجه: {crit.method}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Self Score Selector */}
+                      <div className="text-right shrink-0">
+                        <label className="block text-[10px] text-slate-400 mb-1">خودارزیابی</label>
+                        <select
+                          disabled={activeEval.status === 'locked'}
+                          value={score.self}
+                          onChange={(e) => handleSelfScoreChange(idx, parseInt(e.target.value) || 0)}
+                          className="bg-slate-950 border border-slate-800 rounded-lg py-1 px-2 text-[10px] text-slate-200 focus:outline-none focus:border-teal-500"
+                        >
+                          <option value="0">ثبت نشده</option>
+                          {[1, 2, 3, 4, 5].map(v => (
+                            <option key={v} value={v}>{v} - {PERFORMANCE_SCALE[v]}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <hr className="border-slate-800/40" />
+
+                    {/* Interactive Supervisor Rating Slider/Selector */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                      <div className="space-y-1.5">
+                        <label className="block text-[10px] text-slate-400 font-semibold">ارزیابی نهایی سرپرست خط (۱ تا ۵):</label>
+                        <div className="flex gap-1">
+                          {[1, 2, 3, 4, 5].map((val) => {
+                            const isSelected = score.value === val;
+                            let btnStyle = 'bg-slate-800 text-slate-400 border-slate-750 hover:bg-slate-750 hover:text-slate-200';
+                            
+                            if (isSelected) {
+                              if (val === 1) btnStyle = 'bg-red-500 text-slate-950 border-red-400 font-bold';
+                              else if (val === 2) btnStyle = 'bg-orange-500 text-slate-950 border-orange-400 font-bold';
+                              else if (val === 3) btnStyle = 'bg-amber-400 text-slate-950 border-amber-300 font-bold';
+                              else if (val === 4) btnStyle = 'bg-blue-400 text-slate-950 border-blue-300 font-bold';
+                              else btnStyle = 'bg-emerald-400 text-slate-950 border-emerald-300 font-bold';
+                            }
+
+                            return (
+                              <button
+                                key={val}
+                                type="button"
+                                disabled={activeEval.status === 'locked'}
+                                onClick={() => handleScoreChange(idx, val)}
+                                className={`flex-1 py-1.5 px-2 rounded-lg text-xs border text-center transition-all ${btnStyle} ${
+                                  activeEval.status === 'locked' ? 'opacity-80 cursor-not-allowed' : 'cursor-pointer'
+                                }`}
+                                title={PERFORMANCE_SCALE[val]}
+                              >
+                                <span className="block font-black text-xs">{val}</span>
+                                <span className="text-[7px] leading-none block truncate mt-0.5">{PERFORMANCE_SCALE[val]}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Supporting Justification File Input */}
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <label className="block text-[10px] text-slate-400 font-semibold">شواهد و مستند پشتیبان:</label>
+                          {docRequiredButEmpty && (
+                            <span className="text-[9px] bg-red-500/10 text-red-400 font-bold px-1.5 py-0.5 rounded animate-pulse">
+                              الزامی برای رتبه‌های خاص (۱، ۲ یا ۵)
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          disabled={activeEval.status === 'locked'}
+                          placeholder={isSpecial ? "توصیف سند/لینک گزارش MES (حداقل ۵ کاراکتر)..." : "لینک سند پشتیبان یا شماره لاگ سیستم (اختیاری)..."}
+                          value={score.doc || ''}
+                          onChange={(e) => handleDocChange(idx, e.target.value)}
+                          className={`w-full bg-slate-950 border rounded-xl py-2 px-3 text-[11px] text-slate-200 focus:outline-none focus:border-teal-500 ${
+                            docRequiredButEmpty ? 'border-red-500/40 focus:border-red-500' : 'border-slate-800'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <hr className="border-slate-800" />
+
+            {/* Conversation/Coaching summary note */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5">خلاصه مربیگری و تفاهم توسعه فردی (مذاکره حضوری سرپرست و کارمند)</label>
+              <textarea
+                disabled={activeEval.status === 'locked'}
+                placeholder="تفاهمات انجام شده جهت اقدامات اصلاحی، رفع نقاط ضعف و بهره‌گیری از پتانسیل‌های همکار را خلاصه بنویسید..."
+                value={activeEval.note || ''}
+                onChange={(e) => handleNoteChange(e.target.value)}
+                className="w-full h-24 bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500 resize-none"
+              />
+            </div>
+          </div>
+
+          {/* 3. GEMINI AI smart mentoring and feedback generator */}
+          <div className="bg-slate-800/30 border border-purple-500/20 rounded-2xl p-5 space-y-4 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-32 h-32 bg-purple-500/5 rounded-br-full blur-2xl pointer-events-none" />
+            
+            <div className="flex justify-between items-center flex-wrap gap-2">
+              <div className="flex items-center gap-2.5">
+                <Brain className="w-5 h-5 text-purple-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-200 flex items-center gap-1.5">
+                    <span>برنامه مربیگری و توسعه هوشمند (AI Co-Pilot)</span>
+                    <span className="text-[9px] bg-purple-500/20 text-purple-300 font-semibold px-2 py-0.5 rounded-full">Gemini 3.5</span>
+                  </h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5">تجزیه و تحلیل نقاط قوت و ضعف بر اساس نمرات و تولید خودکار برنامه توسعه فردی (IDP) ارزنده</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGenerateAIFeedback}
+                disabled={activeEval.aiLoading || activeEval.status === 'locked' || activeEval.scores.every(s => s.value === 0)}
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-slate-100 font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-purple-500/10 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {activeEval.aiLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-purple-200" />
+                    <span>در حال ارزیابی با هوش مصنوعی...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-purple-300" />
+                    <span>تولید برنامه توسعه و بازخورد هوشمند (AI)</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* AI Output Result panel */}
+            {activeEval.aiFeedback ? (
+              <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 text-xs space-y-4 divide-y divide-slate-800/40">
+                {/* AI Summary */}
+                <div className="space-y-1">
+                  <div className="font-bold text-purple-300 flex items-center gap-1.5">
+                    <Award className="w-4 h-4 text-purple-400" />
+                    <span>خلاصه ارزیابی و جهت مربیگری هوشمند</span>
+                  </div>
+                  <p className="text-slate-300 leading-relaxed font-sans">{activeEval.aiFeedback.summary}</p>
+                </div>
+
+                {/* Strengths */}
+                <div className="pt-3 space-y-2">
+                  <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                    <span>نقاط قوت و مزیت‌های عملکردی (شایستگی‌های کلیدی)</span>
+                  </div>
+                  <ul className="list-disc list-inside space-y-1 text-slate-400 pl-2">
+                    {activeEval.aiFeedback.strengths.map((str, i) => (
+                      <li key={i} className="leading-relaxed">{str}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                {/* Development areas */}
+                <div className="pt-3 space-y-2">
+                  <div className="font-bold text-orange-400 flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-orange-500" />
+                    <span>نقاط قابل بهبود و فرصت‌های رشد فنی رفتاری</span>
+                  </div>
+                  <ul className="list-disc list-inside space-y-1 text-slate-400 pl-2">
+                    {activeEval.aiFeedback.developmentAreas.map((dev, i) => (
+                      <li key={i} className="leading-relaxed">{dev}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                {/* IDP Action Items */}
+                <div className="pt-3 space-y-2">
+                  <div className="font-bold text-teal-400 flex items-center gap-1.5">
+                    <BookOpen className="w-4 h-4 text-teal-500" />
+                    <span>برنامه اقدام و اهداف پیشنهادی توسعه فردی (Individual Development Plan)</span>
+                  </div>
+                  <ul className="list-decimal list-inside space-y-1 text-slate-400 pl-2">
+                    {activeEval.aiFeedback.actionItems.map((item, i) => (
+                      <li key={i} className="leading-relaxed">{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : (
+              !activeEval.aiLoading && (
+                <div className="bg-slate-900/40 p-4 text-center rounded-xl border border-slate-800 text-xs text-slate-500">
+                  <Brain className="w-7 h-7 text-slate-600 mx-auto mb-2" />
+                  <p>برنامه توسعه هوش مصنوعی ایجاد نشده است. پس از امتیازدهی به تمام شاخص‌ها، دکمه بالا را فشرده و برنامه رشد هوشمند را تحویل بگیرید.</p>
+                </div>
+              )
+            )}
+          </div>
+
+          {/* Save/Submit bar */}
+          <div className="flex justify-between items-center bg-slate-950/40 border border-slate-800 p-4 rounded-2xl">
+            <div className="flex items-center gap-4">
+              {grade && gradeConfig ? (
+                <div className="flex items-center gap-3 bg-slate-900 px-4 py-2 rounded-xl border border-slate-800 text-xs">
+                  <div>
+                    <span className="text-slate-500 text-[10px] block">نمره نهایی محاسبه شده (۱۰۰):</span>
+                    <span className="text-sm font-black text-slate-200 mt-0.5 block">{finalScore}٪</span>
+                  </div>
+                  <div className="w-px h-8 bg-slate-800" />
+                  <div>
+                    <span className="text-slate-500 text-[10px] block">رتبه فرضی سازمان:</span>
+                    <span className={`text-xs font-bold text-${gradeConfig.color}-400 mt-0.5 block`}>{grade} — {gradeConfig.label}</span>
+                  </div>
+                </div>
+              ) : (
+                <span className="text-xs text-slate-500">پس از ارزیابی حداقل یک شاخص، نمره نهایی پدیدار می‌شود.</span>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => onSetActiveEval(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                ذخیره به عنوان پیش‌نویس
+              </button>
+
+              {activeEval.status !== 'locked' ? (
+                <button
+                  type="button"
+                  onClick={handleFinalizeAndLock}
+                  className={`px-4 py-2 font-bold rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer ${
+                    isFormComplete && isDocSatisfied
+                      ? 'bg-emerald-500 hover:bg-emerald-600 text-slate-950'
+                      : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-slate-850'
+                  }`}
+                  disabled={!isFormComplete || !isDocSatisfied}
+                >
+                  <Lock className="w-4 h-4" />
+                  <span>تایید نهایی و قفل فرم ارزیابی</span>
+                </button>
+              ) : (
+                <span className="text-xs bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20 px-4 py-2 rounded-xl flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>🔒 این سند نهایی و آرشیو شده است</span>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. DIALOG MODAL FOR NEW EVALUATION */}
+      {isNewModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center">
+              <h2 className="text-sm font-bold text-slate-200">شروع چرخه ارزیابی عملکرد جدید</h2>
+              <button 
+                onClick={() => setIsNewModalOpen(false)}
+                className="text-slate-400 hover:text-slate-200 text-lg cursor-pointer"
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateEvaluation} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">انتخاب همکار</label>
+                <select
+                  required
+                  value={newEmpId}
+                  onChange={(e) => setNewEmpId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500"
+                >
+                  {employees.map(emp => {
+                    const prof = profiles.find(p => p.id === emp.profileId);
+                    return (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.name} — {emp.code} ({prof?.title || 'بدون پروفایل'})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">دوره زمانی ارزیابی</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="مانند: نیمه اول ۱۴۰۵"
+                  value={newPeriod}
+                  onChange={(e) => setNewPeriod(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsNewModalOpen(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-teal-500 hover:bg-teal-600 text-slate-900 rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  ایجاد سند ارزیابی
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

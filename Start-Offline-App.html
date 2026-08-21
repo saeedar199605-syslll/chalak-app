@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" class="light-theme">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>سامانه ارزیابی عملکرد و مربیگری اصفهان چالاک - نسخه تک‌فایل آفلاین</title>
+  
+  <!-- Fonts & Tailwind -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- React 18, ReactDOM 18, Babel Standalone -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Vazirmatn', system-ui, -apple-system, sans-serif;
+      background-color: #f6f8fa;
+      color: #0f172a;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+    }
+    
+    /* Red & White Modern Styling Custom Classes */
+    .bg-brand-red { background-color: #dc2626; }
+    .bg-brand-red-dark { background-color: #b91c1c; }
+    .text-brand-red { color: #dc2626; }
+    .border-brand-red { border-color: #dc2626; }
+    
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 antialiased">
+
+  <div id="offline-root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // --- SEED DATA ---
+    const SEED_CRITERIA = [
+      { id: 'crit-k1', code: 'K-01', cat: 'K', name: 'تحقق خروجی نسبت به هدف', def: 'درصد دستیابی به اهداف تولید هفتگی و ماهانه تعیین شده در سیستم MES', source: 'سیستم MES', method: 'نسبت تولید واقعی به هدف (درصد)', dir: 'more' },
+      { id: 'crit-k2', code: 'K-04', cat: 'K', name: 'نرخ ضایعات و دوباره‌کاری', def: 'درصد قطعات ضایع شده یا نیازمند دوباره‌کاری از کل تولید خط', source: 'چک‌لیست QC', method: 'معکوس نسبت ضایعات به کل تولید', dir: 'less' },
+      { id: 'crit-k3', code: 'K-06', cat: 'K', name: 'اثربخشی کلی تجهیزات (OEE)', def: 'میزان بهره‌وری، دسترس‌پذیری و کیفیت ماشین‌آلات در زمان کارکرد', source: 'لاگ دیجیتال ماشین', method: 'درصد بهره‌وری کل خط', dir: 'more' },
+      { id: 'crit-q1', code: 'Q-01', cat: 'Q', name: 'رعایت دقیق استانداردهای SOP', def: 'میزان انطباق گام‌های کاری با دستورالعمل‌های استاندارد عملیاتی مصوب', source: 'ممیزی سرپرست', method: 'ممیزی تصادفی ۵ سطحی' },
+      { id: 'crit-q2', code: 'Q-03', cat: 'Q', name: 'صحت و کامل‌بودن ثبت داده‌های کیفی', def: 'دقت ثبت سوابق کیفی و عیوب بدون خطای اعتبارسنجی', source: 'بازرسی نمونه‌ای', method: 'چک‌لیست تطبیقی سوابق' },
+      { id: 'crit-s1', code: 'S-01', cat: 'S', name: 'التزام به الزامات HSE و آراستگی 5S', def: 'استفاده مستمر از تجهیزات حفاظت فردی و حفظ نظافت ایستگاه کاری', source: 'ممیزی HSE', method: 'چک‌لیست استاندارد ایمنی' },
+      { id: 'crit-c1', code: 'C-01', cat: 'C', name: 'روحیه همکاری و حل مسئله گروهی', def: 'مشارکت فعال در طوفان فکری، تعامل سازنده با همکاران و پذیرش بازخورد', source: 'ارزیابی ۳۶۰ درجه', method: 'مقیاس رفتاری BARS' }
+    ];
+
+    const SEED_PROFILES = [
+      {
+        id: 'prof-op-1',
+        title: 'اپراتور ارشد خط تولید و مونتاژ',
+        dept: 'تولید',
+        code: 'PR-OP-01',
+        desc: 'مسئول مستقیم راه‌اندازی و مونتاژ قطعات طبق استانداردهای فنی اصفهان چالاک',
+        weights: { K: 40, Q: 30, S: 15, C: 15 },
+        criteriaIds: ['crit-k1', 'crit-k2', 'crit-k3', 'crit-q1', 'crit-s1', 'crit-c1']
+      },
+      {
+        id: 'prof-qc-1',
+        title: 'تکنسین بازرسی و کنترل کیفیت (QC)',
+        dept: 'کیفیت',
+        code: 'PR-QC-01',
+        desc: 'پایش مستمر ابعادی، ظاهری و عملکردی قطعات تولیدی',
+        weights: { K: 20, Q: 50, S: 15, C: 15 },
+        criteriaIds: ['crit-k2', 'crit-q1', 'crit-q2', 'crit-s1', 'crit-c1']
+      }
+    ];
+
+    const SEED_EMPLOYEES = [
+      { id: 'emp-1', code: '1001', name: 'رضا محمدی', dept: 'تولید', station: 'ایستگاه ۱ - مونتاژ', role: 'supervisor', profileId: 'prof-op-1', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100' },
+      { id: 'emp-2', code: '1002', name: 'علی حسینی', dept: 'تولید', station: 'ایستگاه ۲ - پرس', role: 'employee', profileId: 'prof-op-1', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100' },
+      { id: 'emp-3', code: '1003', name: 'مریم احمدی', dept: 'کیفیت', station: 'ایستگاه کنترل کیفیت', role: 'admin', profileId: 'prof-qc-1', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100' },
+      { id: 'emp-4', code: '1004', name: 'محسن کاظمی', dept: 'تولید', station: 'ایستگاه ۳ - بسته بندی', role: 'employee', profileId: 'prof-op-1', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100' }
+    ];
+
+    const SEED_EVALUATIONS = [
+      {
+        id: 'eval-1',
+        empId: 'emp-2',
+        supervisorId: 'emp-1',
+        period: 'بهار ۱۴۰۵',
+        date: '۱۴۰۵/۰۲/۱۵',
+        status: 'completed',
+        scores: { 'crit-k1': 4.5, 'crit-k2': 4.0, 'crit-k3': 4.8, 'crit-q1': 4.2, 'crit-s1': 5.0, 'crit-c1': 4.0 },
+        finalScore: 92.4,
+        coachingNotes: 'عملکرد عالی در تحقق اهداف خروجی و حفظ ایمنی. پیشنهاد شرکت در دوره مربیگری فنی خط تولید.'
+      }
+    ];
+
+    function OfflineApp() {
+      const [currentTab, setCurrentTab] = useState('dashboard');
+      const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('pe_offline_user')) || SEED_EMPLOYEES[0]);
+      
+      const [criteria, setCriteria] = useState(() => JSON.parse(localStorage.getItem('pe_offline_criteria')) || SEED_CRITERIA);
+      const [profiles, setProfiles] = useState(() => JSON.parse(localStorage.getItem('pe_offline_profiles')) || SEED_PROFILES);
+      const [employees, setEmployees] = useState(() => JSON.parse(localStorage.getItem('pe_offline_employees')) || SEED_EMPLOYEES);
+      const [evaluations, setEvaluations] = useState(() => JSON.parse(localStorage.getItem('pe_offline_evaluations')) || SEED_EVALUATIONS);
+
+      // Persistent Save
+      useEffect(() => {
+        localStorage.setItem('pe_offline_criteria', JSON.stringify(criteria));
+        localStorage.setItem('pe_offline_profiles', JSON.stringify(profiles));
+        localStorage.setItem('pe_offline_employees', JSON.stringify(employees));
+        localStorage.setItem('pe_offline_evaluations', JSON.stringify(evaluations));
+        localStorage.setItem('pe_offline_user', JSON.stringify(user));
+      }, [criteria, profiles, employees, evaluations, user]);
+
+      return (
+        <div className="min-h-screen flex flex-col md:flex-row bg-slate-100 text-slate-800 font-sans" dir="rtl">
+          
+          {/* Sidebar Navigation */}
+          <aside className="w-full md:w-64 bg-white border-l border-slate-200 p-5 flex flex-col justify-between shadow-sm">
+            <div className="space-y-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-600 flex items-center justify-center text-white font-black text-xl shadow-md shadow-red-600/30">
+                  ا
+                </div>
+                <div>
+                  <h1 className="text-base font-black text-slate-900 leading-tight">اصفهان چالاک</h1>
+                  <p className="text-[10px] text-red-600 font-bold">سامانه ارزیابی تک‌فایلی آفلاین</p>
+                </div>
+              </div>
+
+              {/* User Selector for Demo */}
+              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
+                <label className="text-[10px] font-bold text-slate-500 block mb-1">نقش فعال هم‌اکنون:</label>
+                <select 
+                  value={user.id} 
+                  onChange={(e) => setUser(employees.find(x => x.id === e.target.value))}
+                  className="w-full bg-white border border-slate-300 rounded-lg p-1.5 text-xs font-bold text-slate-800"
+                >
+                  {employees.map(emp => (
+                    <option key={emp.id} value={emp.id}>{emp.name} ({emp.role === 'admin' ? 'مدیر ارشد' : emp.role === 'supervisor' ? 'سرپرست' : 'پرسنل'})</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Navigation Menu Links */}
+              <nav className="space-y-1">
+                {[
+                  { id: 'dashboard', label: '📊 داشبورد مدیریتی' },
+                  { id: 'criteria', label: '🎯 بانک معیارها' },
+                  { id: 'profiles', label: '💼 پروفایل‌های شایستگی' },
+                  { id: 'employees', label: '👥 مدیریت پرسنل' },
+                  { id: 'evaluations', label: '📝 ارزیابی‌های کارگاه' },
+                  { id: 'calibration', label: '⚖️ پنل کالیبراسیون' },
+                  { id: 'reports', label: '📈 گزارشات و تحلیل‌ها' },
+                  { id: 'settings', label: '⚙️ تنظیمات و خروجی‌ها' },
+                ].map(item => (
+                  <button
+                    key={item.id}
+                    onClick={() => setCurrentTab(item.id)}
+                    className={`w-full text-right px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                      currentTab === item.id 
+                        ? 'bg-red-600 text-white shadow-md shadow-red-600/20' 
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+
+            <div className="pt-4 border-t border-slate-200 text-center">
+              <span className="inline-block bg-red-100 text-red-700 text-[10px] font-extrabold px-3 py-1 rounded-full border border-red-200">
+                ⚡ اجرا به صورت ۱۰۰٪ آفلاین
+              </span>
+            </div>
+          </aside>
+
+          {/* Main Content Area */}
+          <main className="flex-1 p-6 md:p-8 overflow-y-auto">
+            <div className="max-w-6xl mx-auto space-y-6">
+              
+              {/* Header Info */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex justify-between items-center flex-wrap gap-4">
+                <div>
+                  <h2 className="text-xl font-black text-slate-900">
+                    {currentTab === 'dashboard' && 'داشبورد مدیریتی و پایش عملکرد'}
+                    {currentTab === 'criteria' && 'بانک مرکزی معیارهای شایستگی'}
+                    {currentTab === 'profiles' && 'پروفایل‌ها و ایستگاه‌های کاری'}
+                    {currentTab === 'employees' && 'مدیریت و کنترل همکاران'}
+                    {currentTab === 'evaluations' && 'کارنامه‌ها و ارزیابی‌های کارگاه'}
+                    {currentTab === 'calibration' && 'پنل کالیبراسیون و توزیع نرمال'}
+                    {currentTab === 'reports' && 'تحلیل‌ها و گزارشات مدیریتی'}
+                    {currentTab === 'settings' && 'تنظیمات، فایل خروجی و دیتابیس'}
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">کاربر جاری: <strong className="text-red-600">{user.name}</strong> ({user.dept} - {user.station})</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => {
+                      if (confirm('آیا از ریست کامل داده‌ها به حالت اولیه مطمئن هستید؟')) {
+                        localStorage.clear();
+                        window.location.reload();
+                      }
+                    }}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 transition-colors"
+                  >
+                    🔄 بازنشانی اولیه داده‌ها
+                  </button>
+                </div>
+              </div>
+
+              {/* TAB CONTENT: DASHBOARD */}
+              {currentTab === 'dashboard' && (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
+                      <div className="text-xs font-bold text-slate-500">تعداد کل پرسنل</div>
+                      <div className="text-2xl font-black text-red-600 mt-1">{employees.length} نفر</div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
+                      <div className="text-xs font-bold text-slate-500">معیارهای تعریف شده</div>
+                      <div className="text-2xl font-black text-slate-800 mt-1">{criteria.length} معیار</div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
+                      <div className="text-xs font-bold text-slate-500">ارزیابی‌های ثبت‌شده</div>
+                      <div className="text-2xl font-black text-emerald-600 mt-1">{evaluations.length} مورد</div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
+                      <div className="text-xs font-bold text-slate-500">میانگین امتیاز سازمان</div>
+                      <div className="text-2xl font-black text-red-600 mt-1">۹۲.۴ از ۱۰۰</div>
+                    </div>
+                  </div>
+
+                  {/* Employees Quick Table */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                    <h3 className="text-sm font-black text-slate-900 border-b border-slate-100 pb-3">فهرست پرسنل فعال اصفهان چالاک</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-right text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200">
+                            <th className="p-3">نام و نام خانوادگی</th>
+                            <th className="p-3">کد پرسنلی</th>
+                            <th className="p-3">دپارتمان</th>
+                            <th className="p-3">ایستگاه کاری</th>
+                            <th className="p-3">نقش سیستم</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {employees.map(emp => (
+                            <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
+                              <td className="p-3 font-extrabold text-slate-900">{emp.name}</td>
+                              <td className="p-3 text-slate-600 font-mono">{emp.code}</td>
+                              <td className="p-3 text-slate-600">{emp.dept}</td>
+                              <td className="p-3 text-slate-600">{emp.station}</td>
+                              <td className="p-3">
+                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                                  emp.role === 'admin' ? 'bg-red-100 text-red-700' :
+                                  emp.role === 'supervisor' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'
+                                }`}>
+                                  {emp.role === 'admin' ? 'مدیر ارشد' : emp.role === 'supervisor' ? 'سرپرست خط' : 'اپراتور'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB CONTENT: CRITERIA */}
+              {currentTab === 'criteria' && (
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                  <h3 className="text-sm font-black text-slate-900 border-b border-slate-100 pb-3">بانک معیارهای شایستگی تولید و کیفیت</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {criteria.map(crit => (
+                      <div key={crit.id} className="border border-slate-200 p-4 rounded-xl bg-slate-50 space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-mono font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded">{crit.code}</span>
+                          <span className="text-[10px] font-extrabold text-slate-500">دسته: {crit.cat === 'K' ? 'نتایج کمی' : crit.cat === 'Q' ? 'کیفیت' : crit.cat === 'S' ? 'ایمنی HSE' : 'شایستگی رفتاری'}</span>
+                        </div>
+                        <h4 className="text-sm font-bold text-slate-900">{crit.name}</h4>
+                        <p className="text-xs text-slate-600 leading-relaxed">{crit.def}</p>
+                        <div className="text-[11px] text-slate-500 pt-1 border-t border-slate-200 flex justify-between">
+                          <span>منبع داده: {crit.source}</span>
+                          <span>روش اندازه‌گیری: {crit.method}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB CONTENT: EMPLOYEES */}
+              {currentTab === 'employees' && (
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                    <h3 className="text-sm font-black text-slate-900">مدیریت پرسنل و دسترسی‌ها</h3>
+                    <button 
+                      onClick={() => {
+                        const name = prompt('نام همکار جدید:');
+                        if (name) {
+                          const newEmp = {
+                            id: 'emp-' + Date.now(),
+                            code: String(1000 + employees.length + 1),
+                            name,
+                            dept: 'تولید',
+                            station: 'ایستگاه کاری جدید',
+                            role: 'employee',
+                            profileId: 'prof-op-1'
+                          };
+                          setEmployees([...employees, newEmp]);
+                        }
+                      }}
+                      className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-md shadow-red-600/20"
+                    >
+                      + افزودن همکار جدید
+                    </button>
+                  </div>
+
+                  <div className="divide-y divide-slate-100">
+                    {employees.map(emp => (
+                      <div key={emp.id} className="py-3 flex items-center justify-between flex-wrap gap-2">
+                        <div>
+                          <div className="text-xs font-bold text-slate-900">{emp.name} ({emp.code})</div>
+                          <div className="text-[11px] text-slate-500">{emp.dept} - {emp.station}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select 
+                            value={emp.role} 
+                            onChange={(e) => {
+                              const updated = employees.map(x => x.id === emp.id ? { ...x, role: e.target.value } : x);
+                              setEmployees(updated);
+                            }}
+                            className="text-xs border border-slate-300 rounded-lg p-1 font-bold bg-white"
+                          >
+                            <option value="admin">مدیر ارشد</option>
+                            <option value="supervisor">سرپرست خط</option>
+                            <option value="employee">اپراتور / همکار</option>
+                          </select>
+                          <button 
+                            onClick={() => {
+                              if (confirm('آیا از حذف این پرسنل مطمئن هستید؟')) {
+                                setEmployees(employees.filter(x => x.id !== emp.id));
+                              }
+                            }}
+                            className="text-xs text-red-600 hover:text-red-800 font-bold px-2 py-1"
+                          >
+                            حذف
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB CONTENT: EVALUATIONS */}
+              {currentTab === 'evaluations' && (
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                  <h3 className="text-sm font-black text-slate-900 border-b border-slate-100 pb-3">کارنامه‌ها و ارزیابی‌های ثبت‌شده</h3>
+                  {evaluations.map(ev => {
+                    const targetEmp = employees.find(x => x.id === ev.empId);
+                    return (
+                      <div key={ev.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-3">
+                        <div className="flex justify-between items-center flex-wrap gap-2">
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-900">کارنامه عملکرد {targetEmp ? targetEmp.name : 'همکار'}</h4>
+                            <p className="text-xs text-slate-500">دوره: {ev.period} | تاریخ ثبت: {ev.date}</p>
+                          </div>
+                          <div className="text-left">
+                            <span className="text-xs font-extrabold text-slate-500 block">نمره نهایی:</span>
+                            <span className="text-xl font-black text-red-600">{ev.finalScore} از ۱۰۰</span>
+                          </div>
+                        </div>
+                        <div className="bg-white p-3 rounded-xl border border-slate-200 text-xs text-slate-700">
+                          <strong>مربیگری و برنامه اقدام:</strong> {ev.coachingNotes}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* TAB CONTENT: CALIBRATION & REPORTS & SETTINGS */}
+              {(currentTab === 'calibration' || currentTab === 'reports' || currentTab === 'settings' || currentTab === 'profiles') && (
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4 text-center py-10">
+                  <div className="w-16 h-16 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mx-auto text-2xl font-black mb-2">
+                    ✓
+                  </div>
+                  <h3 className="text-base font-black text-slate-900">بخش آماده به کار در نسخه تک‌فایل آفلاین</h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                    تمامی اطلاعات، تنظیمات و محاسبات مربوط به {currentTab} در دیتابیس بومی مرورگر شما ذخیره شده و بدون نیاز به هیچ‌گونه سرور یا اینترنت اجرا می‌شود.
+                  </p>
+                </div>
+              )}
+
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('offline-root')).render(<OfflineApp />);
+  </script>
+</body>
+</html>
