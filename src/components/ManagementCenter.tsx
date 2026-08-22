@@ -5,6 +5,15 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
+  validateAdminPasswordChange, 
+  sanitizeInputString, 
+  clearLegacyAdminSessions,
+  validateEmployeeInput,
+  validateCriterionInput,
+  validateJobProfileInput,
+  validateEvaluationInput
+} from '../utils/validation';
+import { 
   Shield, 
   Key, 
   Download, 
@@ -13,6 +22,7 @@ import {
   AlertCircle, 
   FileSpreadsheet, 
   FileText, 
+  FileJson,
   RefreshCw, 
   Trash2, 
   Search, 
@@ -38,11 +48,22 @@ import {
   CheckCheck,
   Filter,
   Activity,
+  Clock,
   Layers,
   Database,
-  FileCheck
+  FileCheck,
+  ArrowUpDown,
+  HardDrive,
+  Server,
+  Boxes,
+  FileCode,
+  Zap,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  Info
 } from 'lucide-react';
-import { Employee, JobProfile, Criterion, Evaluation, UserRole, UserCustomPermission } from '../types';
+import { Employee, JobProfile, Criterion, Evaluation, UserRole, UserCustomPermission, CategoryKey } from '../types';
 import ExcelIntegrationCenter from './ExcelIntegrationCenter';
 
 export interface SystemLog {
@@ -65,6 +86,7 @@ interface ManagementCenterProps {
   onSetEvaluations: (evals: Evaluation[]) => void;
   currentUser: Employee;
   theme: 'dark' | 'light';
+  onForceReauth?: () => void;
 }
 
 export default function ManagementCenter({
@@ -77,7 +99,8 @@ export default function ManagementCenter({
   onSetCriteria,
   onSetEvaluations,
   currentUser,
-  theme
+  theme,
+  onForceReauth
 }: ManagementCenterProps) {
   // Navigation Tab inside Management Center
   const [activeSectionTab, setActiveSectionTab] = useState<'security' | 'rbac' | 'backup' | 'logs' | 'all'>('security');
@@ -239,10 +262,20 @@ export default function ManagementCenter({
     }
   }, [selectedIndividualId, employees, customUserPermissions, permissions]);
 
-  // --- 5. STATE FOR CSV / BACKUP / AUDIT LOGS ---
-  const [csvText, setCsvText] = useState('');
-  const [csvFeedback, setCsvFeedback] = useState<{ success: boolean; message: string } | null>(null);
-  const [backupFeedback, setBackupFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  // --- 5. STATE FOR DATA MANAGEMENT, IMPORT/EXPORT & AUDIT LOGS ---
+  type DataEntityKey = 'full_system' | 'employees' | 'criteria' | 'profiles' | 'evaluations';
+  const [targetImportEntity, setTargetImportEntity] = useState<DataEntityKey>('full_system');
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [rawImportText, setRawImportText] = useState('');
+  const [importFeedback, setImportFeedback] = useState<{
+    success: boolean;
+    title: string;
+    message: string;
+    errors?: string[];
+    stats?: { count: number; updated: number; created: number };
+  } | null>(null);
+  const [isProcessingImport, setIsProcessingImport] = useState(false);
+  const [dataHubActiveView, setDataHubActiveView] = useState<'hub' | 'import' | 'export' | 'tools'>('hub');
   const [logFilter, setLogFilter] = useState<'all' | 'info' | 'warning' | 'success' | 'danger'>('all');
 
   const [logs, setLogs] = useState<SystemLog[]>(() => {
@@ -442,46 +475,73 @@ export default function ManagementCenter({
     setPasswordFeedback(null);
 
     const storedPass = localStorage.getItem('pe_admin_password') || 'admin';
-    if (currentAdminPasswordInput !== storedPass) {
-      setPasswordFeedback({ type: 'error', message: 'کلمه عبور فعلی نادرست است.' });
+    const isCurrentValid = currentAdminPasswordInput === storedPass;
+
+    if (!isCurrentValid) {
+      setPasswordFeedback({ type: 'error', message: 'کلمه عبور فعلی مدیریت نادرست است. لطفاً کلمه عبور جاری را با دقت وارد فرمایید.' });
       return;
     }
 
-    if (newAdminPasswordInput.length < 4) {
-      setPasswordFeedback({ type: 'error', message: 'کلمه عبور جدید باید حداقل ۴ کاراکتر باشد.' });
+    const validation = validateAdminPasswordChange({
+      currentPassword: currentAdminPasswordInput,
+      newPassword: newAdminPasswordInput,
+      confirmPassword: confirmAdminPasswordInput
+    });
+
+    if (!validation.success) {
+      setPasswordFeedback({ type: 'error', message: validation.error });
       return;
     }
 
-    if (newAdminPasswordInput !== confirmAdminPasswordInput) {
-      setPasswordFeedback({ type: 'error', message: 'کلمه عبور جدید با تکرار آن مطابقت ندارد.' });
-      return;
-    }
+    const cleanNewPass = validation.newPassword;
+    const nowIso = new Date().toISOString();
 
-    localStorage.setItem('pe_admin_password', newAdminPasswordInput);
-    addLog('تغییر کلمه عبور مدیریت', 'کلمه عبور ورود مدیریت ارشد سیستم با موفقیت بروزرسانی شد.', 'success');
-    setPasswordFeedback({ type: 'success', message: 'کلمه عبور مدیریت با موفقیت تغییر یافت و ذخیره شد.' });
+    // Clear legacy 'admin' local session keys and invalidate old session immediately
+    clearLegacyAdminSessions();
+
+    localStorage.setItem('pe_admin_password', cleanNewPass);
+    localStorage.setItem('pe_admin_password_updated_at', nowIso);
+    
+    // Also sync to user passwords dictionary for admin username
+    setUserPasswords(prev => {
+      const updated = { ...prev, admin: cleanNewPass };
+      localStorage.setItem('pe_user_passwords', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Notify other components & tabs of password change
+    window.dispatchEvent(new CustomEvent('pe_admin_password_changed', { detail: { timestamp: nowIso } }));
+    window.dispatchEvent(new Event('storage'));
+
+    // Post to server state sync
+    fetch('/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pe_admin_password: cleanNewPass,
+        pe_admin_password_updated_at: nowIso,
+        updatedAt: nowIso
+      })
+    }).catch(console.error);
+
+    addLog('تغییر کلمه عبور مدیریت', 'کلمه عبور ورود مدیریت ارشد با موفقیت بروزرسانی شد و نشست‌های قبلی ابطال گردید.', 'success');
+    setPasswordFeedback({ 
+      type: 'success', 
+      message: 'کلمه عبور مدیریت با موفقیت تغییر یافت. جهت تضمین امنیت، نشست قبلی ابطال گردید و به صفحه ورود منتقل می‌شوید...' 
+    });
     setCurrentAdminPasswordInput('');
     setNewAdminPasswordInput('');
     setConfirmAdminPasswordInput('');
-    setTimeout(() => setPasswordFeedback(null), 5000);
-  };
 
-  const handleResetAdminPasswordDirect = () => {
-    if (window.confirm('آیا مایلید کلمه عبور مدیر سیستم به مقدار پیش‌فرض «admin» بازنشانی شود؟')) {
-      localStorage.setItem('pe_admin_password', 'admin');
-      addLog('بازنشانی کلمه عبور مدیریت', 'کلمه عبور مدیر سیستم به مقدار پیش‌فرض (admin) بازنشانی شد.', 'warning');
-      setPasswordFeedback({ type: 'success', message: 'کلمه عبور مدیریت به مقدار پیش‌فرض (admin) بازگردانده شد.' });
-      setCurrentAdminPasswordInput('');
-      setNewAdminPasswordInput('');
-      setConfirmAdminPasswordInput('');
-      setTimeout(() => setPasswordFeedback(null), 4000);
-    }
-  };
-
-  const handleCopyMasterKey = () => {
-    navigator.clipboard.writeText('Chalak@2026#Master');
-    setCopiedMasterKey(true);
-    setTimeout(() => setCopiedMasterKey(false), 2000);
+    // Force persistent session to re-authenticate after brief confirmation
+    setTimeout(() => {
+      if (onForceReauth) {
+        onForceReauth();
+      } else {
+        clearLegacyAdminSessions();
+        window.location.reload();
+      }
+    }, 1600);
   };
 
   // --- RBAC & INDIVIDUAL PERMISSION HANDLERS ---
@@ -574,95 +634,45 @@ export default function ManagementCenter({
     }));
   };
 
-  // --- CSV IMPORT ---
-  const handleImportCSV = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!csvText.trim()) {
-      setCsvFeedback({ success: false, message: 'لطفاً کادر متنی داده‌ها را تکمیل کنید.' });
-      return;
-    }
+  // =========================================================================
+  // UNIVERSAL DATA MANAGEMENT, IMPORT, EXPORT & MIGRATION ENGINE
+  // =========================================================================
 
-    try {
-      const lines = csvText.trim().split('\n');
-      if (lines.length < 2) {
-        setCsvFeedback({ success: false, message: 'فرمت نامعتبر. فایل باید حداقل دارای یک ردیف هدر و یک ردیف داده باشد.' });
-        return;
-      }
-
-      const newEmployeesList: Employee[] = [...employees];
-      let importedCount = 0;
-      let errorCount = 0;
-
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-
-        const cols = line.split(/[,;\t]/).map(c => c.trim().replace(/^["']|["']$/g, ''));
-        if (cols.length < 5) {
-          errorCount++;
-          continue;
-        }
-
-        const [name, code, unit, profileTitle, username, role] = cols;
-        let matchedProfile = profiles.find(p => p.title.includes(profileTitle) || p.id === profileTitle);
-        const profileId = matchedProfile ? matchedProfile.id : (profiles[0]?.id || 'prof-1');
-        const finalRole: UserRole = (role === 'admin' || role === 'supervisor' || role === 'employee') ? role : 'employee';
-
-        const exists = newEmployeesList.some(emp => emp.username.toLowerCase() === username.toLowerCase() || emp.code === code);
-        if (exists) {
-          const idx = newEmployeesList.findIndex(emp => emp.username.toLowerCase() === username.toLowerCase() || emp.code === code);
-          newEmployeesList[idx] = { ...newEmployeesList[idx], name, unit, profileId, role: finalRole };
-        } else {
-          newEmployeesList.push({
-            id: `emp-${Math.random().toString(36).substring(2, 9)}`,
-            name,
-            code: code.toUpperCase(),
-            unit,
-            profileId,
-            role: finalRole,
-            username: username.toLowerCase()
-          });
-        }
-        importedCount++;
-      }
-
-      onSetEmployees(newEmployeesList);
-      addLog('ایمپورت پرسنل', `تعداد ${importedCount} پرسنل جدید به صورت گروهی بارگذاری/بروزرسانی شدند.`, 'success');
-      setCsvFeedback({ 
-        success: true, 
-        message: `بارگذاری موفقیت‌آمیز! تعداد ${importedCount} همکار ایمپورت شدند. (خطاها: ${errorCount})` 
-      });
-      setCsvText('');
-    } catch {
-      setCsvFeedback({ success: false, message: 'خطا در تحلیل فرمت اطلاعات ارسالی. لطفاً هدرها و جداکننده‌ها را چک کنید.' });
-    }
-  };
-
-  const handleDownloadSampleCSV = () => {
-    const csvContent = `نام و نام خانوادگی,کد پرسنلی,واحد سازمانی,عنوان شایستگی ایستگاه,نام کاربری,نقش دسترسی
-علیرضا رضایی,EC-110,سالن مونتاژ ۲,اپراتور مونتاژ برد الکترونیک,rezaei,employee
-محمد حسینی,EC-115,واحد کنترل کیفی QC,کارشناس کنترل کیفیت فرآیند,hoseini,supervisor
-زهرا عباسی,EC-120,تضمین کیفیت QA,اپراتور تولید کارگاهی,abasi,employee`;
-
-    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
+  // Helper to trigger browser download
+  const triggerBrowserDownload = (content: string, filename: string, mimeType = 'text/plain;charset=utf-8') => {
+    const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'chalak_employees_sample_template.csv');
+    link.href = url;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    addLog('دانلود قالب اکسل', 'دانلود نمونه فایل ورود گروهی پرسنل اصفهان چالاک', 'info');
+    URL.revokeObjectURL(url);
   };
 
-  // --- BACKUP & RESTORE JSON ---
-  const handleExportJSON = () => {
-    const dataToExport = {
+  // Helper to sanitize CSV field
+  const formatCSVField = (val: unknown): string => {
+    if (val === null || val === undefined) return '';
+    const str = String(val).trim();
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  // 1. FULL SYSTEM BACKUP (JSON)
+  const handleExportFullBackupJSON = () => {
+    const fullBackup = {
       meta: {
-        app: 'اصفهان چالاک - سامانه ارزیابی عملکرد و مربیگری',
-        version: '3.5.0-Enterprise',
+        app: 'اصفهان چالاک - سامانه جامع مدیریت عملکرد، ارزیابی و شایستگی سازمانی',
+        version: '4.0.0-Enterprise',
         exportDate: new Date().toISOString(),
-        exportedBy: currentUser.name
+        exportedBy: currentUser.name,
+        totalEmployees: employees.length,
+        totalCriteria: criteria.length,
+        totalProfiles: profiles.length,
+        totalEvaluations: evaluations.length
       },
       employees,
       profiles,
@@ -675,196 +685,745 @@ export default function ManagementCenter({
       logs
     };
 
-    const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(dataToExport, null, 2))}`;
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', jsonString);
-    downloadAnchor.setAttribute('download', `chalak_full_backup_${Date.now()}.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
-    addLog('پشتیبان‌گیری کامل', 'یک نسخه پشتیبان کامل از تمامی دیتابیس و تنظیمات سامانه صادر شد.', 'success');
+    const jsonString = JSON.stringify(fullBackup, null, 2);
+    const filename = `chalak_full_backup_${new Date().toISOString().slice(0, 10)}_${Date.now()}.json`;
+    triggerBrowserDownload(jsonString, filename, 'application/json;charset=utf-8');
+    
+    addLog(
+      'پشتیبان‌گیری کامل سامانه',
+      `پشتیبان‌گیری جامع شامل ${employees.length} کارمند، ${criteria.length} شاخص، ${profiles.length} پروفایل و ${evaluations.length} ارزیابی با موفقیت صادر شد.`,
+      'success'
+    );
+
+    setImportFeedback({
+      success: true,
+      title: 'پشتیبان‌گیری کامل انجام شد',
+      message: `فایل کامل پایگاه داده (${filename}) با موفقیت تولید و بارگیری شد.`
+    });
   };
 
-  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileReader = new FileReader();
-    if (e.target.files && e.target.files[0]) {
-      fileReader.readAsText(e.target.files[0], "UTF-8");
-      fileReader.onload = (event) => {
-        try {
-          const parsed = JSON.parse(event.target?.result as string);
-          if (parsed.employees && parsed.profiles && parsed.criteria && parsed.evaluations) {
+  // 2. EXPORT SPECIFIC ENTITY TO JSON
+  const handleExportEntityJSON = (entity: DataEntityKey) => {
+    let data: any = null;
+    let filenamePrefix = 'export';
+    let entityTitle = '';
+
+    switch (entity) {
+      case 'employees':
+        data = employees;
+        filenamePrefix = 'employees_dataset';
+        entityTitle = 'لیست کامل پرسنل';
+        break;
+      case 'criteria':
+        data = criteria;
+        filenamePrefix = 'criteria_bank';
+        entityTitle = 'بانک شاخص‌های شایستگی';
+        break;
+      case 'profiles':
+        data = profiles;
+        filenamePrefix = 'job_profiles';
+        entityTitle = 'پروفایل‌های شغلی';
+        break;
+      case 'evaluations':
+        data = evaluations;
+        filenamePrefix = 'evaluations_records';
+        entityTitle = 'سوابق و نمرات ارزیابی';
+        break;
+      default:
+        handleExportFullBackupJSON();
+        return;
+    }
+
+    const payload = {
+      meta: {
+        entity,
+        entityTitle,
+        count: Array.isArray(data) ? data.length : 0,
+        exportDate: new Date().toISOString(),
+        exportedBy: currentUser.name
+      },
+      data
+    };
+
+    const jsonString = JSON.stringify(payload, null, 2);
+    const filename = `chalak_${filenamePrefix}_${Date.now()}.json`;
+    triggerBrowserDownload(jsonString, filename, 'application/json;charset=utf-8');
+    
+    addLog('خروجی JSON اختصاصی', `خروجی داده‌های بخش «${entityTitle}» در قالب JSON دریافت شد.`, 'info');
+  };
+
+  // 3. EXPORT SPECIFIC ENTITY TO CSV (WITH UTF-8 BOM FOR EXCEL)
+  const handleExportEntityCSV = (entity: DataEntityKey) => {
+    let csvRows: string[] = [];
+    let filename = `chalak_${entity}_${Date.now()}.csv`;
+    let title = '';
+
+    if (entity === 'employees') {
+      title = 'لیست پرسنل و پرونده‌های همکاران';
+      csvRows.push([
+        'نام و نام خانوادگی',
+        'کد پرسنلی',
+        'واحد سازمانی',
+        'عنوان رده شغلی',
+        'نقش کاربری',
+        'نام کاربری',
+        'کد پرسنلی سرپرست مستقیم',
+        'کد پرسنلی ارزیاب همتا',
+        'کد پرسنلی تصویب‌کننده'
+      ].join(','));
+
+      employees.forEach(emp => {
+        const prof = profiles.find(p => p.id === emp.profileId);
+        const sup = employees.find(e => e.id === emp.supervisorId);
+        const peer = employees.find(e => e.id === emp.peerReviewerId);
+        const appr = employees.find(e => e.id === emp.approverId);
+        const roleLabel = emp.role === 'admin' ? 'مدیر ارشد' : emp.role === 'supervisor' ? 'سرپرست' : 'کارمند';
+
+        csvRows.push([
+          formatCSVField(emp.name),
+          formatCSVField(emp.code),
+          formatCSVField(emp.unit),
+          formatCSVField(prof?.title || prof?.code || emp.profileId),
+          formatCSVField(roleLabel),
+          formatCSVField(emp.username),
+          formatCSVField(sup?.code || ''),
+          formatCSVField(peer?.code || ''),
+          formatCSVField(appr?.code || '')
+        ].join(','));
+      });
+    } else if (entity === 'criteria') {
+      title = 'بانک شاخص‌ها و سنجه‌های شایستگی';
+      csvRows.push([
+        'کد شاخص',
+        'عنوان شاخص',
+        'دسته‌بندی (K/B/Q/S/L)',
+        'تعریف عملیاتی و سنجه',
+        'منبع داده و استخراج',
+        'روش و فرمول سنجش',
+        'جهت مطلوبیت (more/less)'
+      ].join(','));
+
+      criteria.forEach(crit => {
+        csvRows.push([
+          formatCSVField(crit.code),
+          formatCSVField(crit.name),
+          formatCSVField(crit.cat),
+          formatCSVField(crit.def),
+          formatCSVField(crit.source || ''),
+          formatCSVField(crit.method || ''),
+          formatCSVField(crit.dir || 'more')
+        ].join(','));
+      });
+    } else if (entity === 'profiles') {
+      title = 'پروفایل‌ها و ماتریس‌های شایستگی شغلی';
+      csvRows.push([
+        'عنوان رده شغلی',
+        'کد شغل',
+        'خانواده شغلی',
+        'شاخص‌ها و اوزان شایستگی',
+        'وضعیت تصویب'
+      ].join(','));
+
+      profiles.forEach(prof => {
+        const summary = prof.items.map(item => {
+          const crit = criteria.find(c => c.id === item.cid);
+          return `${crit?.code || item.cid}(${item.weight}%)`;
+        }).join(' | ');
+
+        csvRows.push([
+          formatCSVField(prof.title),
+          formatCSVField(prof.code),
+          formatCSVField(prof.family),
+          formatCSVField(summary),
+          formatCSVField(prof.locked ? 'تصویب شده' : 'پیش‌نویس')
+        ].join(','));
+      });
+    } else if (entity === 'evaluations') {
+      title = 'سوابق و احکام ارزیابی عملکرد';
+      csvRows.push([
+        'کد پرسنلی همکار',
+        'نام همکار',
+        'دوره ارزیابی',
+        'عنوان پروفایل شغلی',
+        'وضعیت پرونده',
+        'میانگین نمره نهایی',
+        'یادداشت‌های توسعه و مربیگری'
+      ].join(','));
+
+      evaluations.forEach(ev => {
+        const emp = employees.find(e => e.id === ev.empId);
+        const prof = profiles.find(p => p.id === ev.profileId);
+        const totalWeight = ev.scores.reduce((sum, s) => sum + s.weight, 0);
+        const weightedScore = totalWeight > 0 
+          ? (ev.scores.reduce((sum, s) => sum + s.value * s.weight, 0) / totalWeight).toFixed(2)
+          : '0.00';
+        
+        const statusLabel = 
+          ev.status === 'locked' ? 'قفل شده' :
+          ev.status === 'calibrated' ? 'کالیبره شده' : 'پیش‌نویس';
+
+        csvRows.push([
+          formatCSVField(emp?.code || ev.empId),
+          formatCSVField(emp?.name || ''),
+          formatCSVField(ev.period),
+          formatCSVField(prof?.title || ev.profileId),
+          formatCSVField(statusLabel),
+          formatCSVField(weightedScore),
+          formatCSVField(ev.note || '')
+        ].join(','));
+      });
+    } else {
+      handleExportFullBackupJSON();
+      return;
+    }
+
+    // Include UTF-8 BOM so Excel opens Persian text without distortion
+    const csvContent = '\uFEFF' + csvRows.join('\r\n');
+    triggerBrowserDownload(csvContent, filename, 'text/csv;charset=utf-8');
+    addLog('خروجی اکسل CSV', `خروجی داده‌های «${title}» با فرمت استاندارد CSV دانلود شد.`, 'info');
+  };
+
+  // 4. DOWNLOAD BLANK / SAMPLE CSV TEMPLATES
+  const handleDownloadEntityTemplate = (entity: DataEntityKey) => {
+    let templateRows: string[] = [];
+    let filename = `chalak_${entity}_template.csv`;
+
+    if (entity === 'employees') {
+      templateRows.push('نام و نام خانوادگی,کد پرسنلی,واحد سازمانی,عنوان رده شغلی,نقش کاربری,نام کاربری,کد پرسنلی سرپرست مستقیم,کد پرسنلی ارزیاب همتا,کد پرسنلی تصویب‌کننده');
+      templateRows.push('مهندس علی رضایی,EMP-1001,سالن ماشین‌کاری ۱,اپراتور ارشد تراشکاری CNC,کارمند,ali_rezaei,EMP-1008,EMP-1002,EMP-1008');
+      templateRows.push('مهندس کامران صباغی,EMP-1008,سالن ماشین‌کاری ۱,سرپرست تولید و ماشین‌کاری,سرپرست,kamran,,,');
+      templateRows.push('مهندس سارا عباسی,EMP-1002,واحد کنترل کیفیت QC,کارشناس ارشد کنترل کیفیت,کارمند,sara_abbasi,EMP-1008,,EMP-1008');
+    } else if (entity === 'criteria') {
+      templateRows.push('کد شاخص,عنوان شاخص,دسته‌بندی (K/B/Q/S/L),تعریف عملیاتی و سنجه,منبع داده و استخراج,روش و فرمول سنجش,جهت مطلوبیت (more/less)');
+      templateRows.push('K-PRD-01,درصد تحقق برنامه تولید ماهانه,K,نسبت قطعات سالم مونتاژ شده به برنامه مصوب ماهانه,سیستم MES و کارت تولید,فرمول درصدی (تولید واقعی تقسیم بر هدف),more');
+      templateRows.push('B-HSE-01,رعایت ضوابط ایمنی و ۵اس کارگاه,B,استفاده از تجهیزات حفاظت فردی PPE و تفکیک زباله و نظم ۵اس,گزارشات ممیزی HSE و چک‌لیست سرپرست,مقیاس ۵ سطحی کیفی,more');
+      templateRows.push('K-SCR-02,نرخ ضایعات و قطعات معیوب,K,درصد قطعات اسقاطی نسبت به کل خروجی خط,کنترل کیفیت آماری SQC,درصد ضایعات خط,less');
+    } else if (entity === 'profiles') {
+      templateRows.push('عنوان رده شغلی,کد شغل,خانواده شغلی,شاخص‌ها و اوزان شایستگی,وضعیت تصویب');
+      templateRows.push('اپراتور ارشد تراشکاری CNC,OP-CNC-01,فنی و مهندسی,K-PRD-01(25%) | B-HSE-01(20%) | K-QC-01(20%) | B-TEAM-01(20%) | B-5S-01(15%),تصویب شده');
+      templateRows.push('سرپرست مونتاژ و بسته‌بندی,SUP-MN-01,تولید و عملیات,K-PRD-01(30%) | B-HSE-01(25%) | B-LEAD-01(25%) | K-EFF-01(20%),تصویب شده');
+    } else if (entity === 'evaluations') {
+      templateRows.push('کد پرسنلی همکار,نام همکار,دوره ارزیابی,عنوان پروفایل شغلی,وضعیت پرونده,میانگین نمره نهایی,یادداشت‌های توسعه و مربیگری');
+      templateRows.push('EMP-1001,مهندس علی رضایی,ارزیابی عملکرد تابستان ۱۴۰۳,اپراتور ارشد تراشکاری CNC,approved,4.40,دقت و انضباط فنی بسیار بالا در شیفت شب');
+    } else {
+      handleExportFullBackupJSON();
+      return;
+    }
+
+    const csvContent = '\uFEFF' + templateRows.join('\r\n');
+    triggerBrowserDownload(csvContent, filename, 'text/csv;charset=utf-8');
+  };
+
+  // 5. UNIVERSAL IMPORT PROCESSOR
+  const handleProcessImport = (contentToImport: string, entityTarget: DataEntityKey, mode: 'merge' | 'replace') => {
+    const text = contentToImport.trim();
+    if (!text) {
+      setImportFeedback({
+        success: false,
+        title: 'داده‌ای یافت نشد',
+        message: 'لطفاً فایل مورد نظر را انتخاب کرده یا متن داده‌ها را در کادر وارد نمایید.'
+      });
+      return;
+    }
+
+    setIsProcessingImport(true);
+    const errors: string[] = [];
+    let successCount = 0;
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    try {
+      // CHECK IF INPUT IS A FULL SYSTEM BACKUP JSON
+      if (text.startsWith('{') && text.endsWith('}')) {
+        const parsed = JSON.parse(text);
+
+        // Check if it is a full backup object
+        if (parsed.employees && parsed.profiles && parsed.criteria && parsed.evaluations) {
+          if (mode === 'replace') {
             onSetEmployees(parsed.employees);
             onSetProfiles(parsed.profiles);
             onSetCriteria(parsed.criteria);
             onSetEvaluations(parsed.evaluations);
-            if (parsed.permissions) setPermissions(parsed.permissions);
-            if (parsed.customUserPermissions) setCustomUserPermissions(parsed.customUserPermissions);
-            if (parsed.userPasswords) setUserPasswords(parsed.userPasswords);
-            if (parsed.lockedUsers) setLockedUsers(parsed.lockedUsers);
-            if (parsed.logs) setLogs(parsed.logs);
-
-            addLog('بازیابی پشتیبان', 'دیتابیس سیستم از فایل پشتیبان با موفقیت بازیابی شد.', 'danger');
-            setBackupFeedback({ success: true, message: 'بازیابی کلیه اطلاعات با موفقیت کامل انجام شد.' });
           } else {
-            setBackupFeedback({ success: false, message: 'ساختار فایل پشتیبان نامعتبر است.' });
+            // Merge mode for full system
+            const empMap = new Map(employees.map(e => [e.code.toUpperCase(), e]));
+            parsed.employees.forEach((e: Employee) => empMap.set(e.code.toUpperCase(), e));
+            onSetEmployees(Array.from(empMap.values()));
+
+            const critMap = new Map(criteria.map(c => [c.code.toUpperCase(), c]));
+            parsed.criteria.forEach((c: Criterion) => critMap.set(c.code.toUpperCase(), c));
+            onSetCriteria(Array.from(critMap.values()));
+
+            const profMap = new Map(profiles.map(p => [p.code.toUpperCase(), p]));
+            parsed.profiles.forEach((p: JobProfile) => profMap.set(p.code.toUpperCase(), p));
+            onSetProfiles(Array.from(profMap.values()));
+
+            const evalMap = new Map(evaluations.map(ev => [ev.id, ev]));
+            parsed.evaluations.forEach((ev: Evaluation) => evalMap.set(ev.id, ev));
+            onSetEvaluations(Array.from(evalMap.values()));
           }
-        } catch {
-          setBackupFeedback({ success: false, message: 'خطا در خواندن و پارس کردن فایل JSON پشتیبان.' });
+
+          if (parsed.permissions) setPermissions(parsed.permissions);
+          if (parsed.customUserPermissions) setCustomUserPermissions(parsed.customUserPermissions);
+          if (parsed.userPasswords) setUserPasswords(parsed.userPasswords);
+          if (parsed.lockedUsers) setLockedUsers(parsed.lockedUsers);
+          if (parsed.logs) setLogs(parsed.logs);
+
+          addLog(
+            'بازیابی پایگاه داده جامع',
+            `بازیابی سیستم از فایل پشتیبان با حالت «${mode === 'replace' ? 'جایگزینی کامل' : 'ادغام هوشمند'}» انجام شد.`,
+            'danger'
+          );
+
+          setImportFeedback({
+            success: true,
+            title: 'بازیابی جامع سیستم با موفقیت کامل انجام شد',
+            message: `داده‌های ${parsed.employees.length} کارمند، ${parsed.criteria.length} شاخص، ${parsed.profiles.length} رده شغلی و ${parsed.evaluations.length} ارزیابی در پایگاه داده بازنشانی شدند.`,
+            stats: { count: parsed.employees.length + parsed.criteria.length + parsed.profiles.length, updated: 0, created: 0 }
+          });
+          setRawImportText('');
+          setIsProcessingImport(false);
+          return;
         }
-      };
+
+        // If JSON has a "data" array
+        if (Array.isArray(parsed.data)) {
+          // delegate to array processing below
+        }
+      }
+
+      // PARSE JSON ARRAY OR CSV ROWS
+      let rawItems: any[] = [];
+
+      if (text.startsWith('[') && text.endsWith(']')) {
+        rawItems = JSON.parse(text);
+      } else if (text.startsWith('{') && text.endsWith('}')) {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed.data)) {
+          rawItems = parsed.data;
+        } else {
+          rawItems = [parsed];
+        }
+      } else {
+        // Parse CSV Lines
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+        if (lines.length < 2) {
+          throw new Error('فایل CSV باید حداقل شامل یک سطر عنوان (Header) و یک سطر داده باشد.');
+        }
+
+        // Parse Header line
+        const headerCols = lines[0].split(/[,;\t]/).map(c => c.trim().replace(/^["']|["']$/g, ''));
+
+        for (let i = 1; i < lines.length; i++) {
+          const rawLine = lines[i];
+          if (!rawLine) continue;
+
+          // Simple CSV line splitter respecting quotes
+          const cols: string[] = [];
+          let insideQuotes = false;
+          let currentField = '';
+
+          for (let charIdx = 0; charIdx < rawLine.length; charIdx++) {
+            const char = rawLine[charIdx];
+            if (char === '"' || char === "'") {
+              insideQuotes = !insideQuotes;
+            } else if ((char === ',' || char === ';' || char === '\t') && !insideQuotes) {
+              cols.push(currentField.trim().replace(/^["']|["']$/g, ''));
+              currentField = '';
+            } else {
+              currentField += char;
+            }
+          }
+          cols.push(currentField.trim().replace(/^["']|["']$/g, ''));
+
+          const itemObj: Record<string, string> = {};
+          headerCols.forEach((header, colIdx) => {
+            itemObj[header] = cols[colIdx] || '';
+          });
+          rawItems.push(itemObj);
+        }
+      }
+
+      if (rawItems.length === 0) {
+        throw new Error('هیچ رکوردی برای پردازش در فایل ورودی یافت نشد.');
+      }
+
+      // ENTITY-SPECIFIC PROCESSORS
+      if (entityTarget === 'employees') {
+        const newEmployeesList = mode === 'replace' ? [] : [...employees];
+        const defaultProfId = profiles[0]?.id || 'prof-1';
+
+        rawItems.forEach((raw, idx) => {
+          const rowNum = idx + 1;
+          const name = (raw.name || raw['نام و نام خانوادگی'] || '').trim();
+          const code = (raw.code || raw['کد پرسنلی'] || '').trim().toUpperCase();
+          const unit = (raw.unit || raw['واحد سازمانی'] || 'واحد تولید').trim();
+
+          const rawProf = (raw.profile || raw.profileId || raw['عنوان رده شغلی'] || raw['پروفایل شغلی'] || '').trim();
+          let profileId = defaultProfId;
+          if (rawProf) {
+            const matchedProf = profiles.find(p => 
+              p.id === rawProf || 
+              p.code.toLowerCase() === rawProf.toLowerCase() || 
+              p.title.toLowerCase() === rawProf.toLowerCase()
+            );
+            if (matchedProf) profileId = matchedProf.id;
+          }
+
+          const rawRole = (raw.role || raw['نقش کاربری'] || raw['نقش'] || 'employee').trim().toLowerCase();
+          let role: UserRole = 'employee';
+          if (rawRole.includes('admin') || rawRole.includes('مدیر')) role = 'admin';
+          else if (rawRole.includes('supervisor') || rawRole.includes('سرپرست')) role = 'supervisor';
+
+          let username = (raw.username || raw['نام کاربری'] || '').trim().toLowerCase();
+          if (!username && code) {
+            username = `user_${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+          }
+
+          const rawSupCode = (raw.supervisor || raw.supervisorId || raw['کد پرسنلی سرپرست مستقیم'] || '').trim().toUpperCase();
+          const supervisor = rawSupCode ? employees.find(e => e.code.toUpperCase() === rawSupCode || e.id === rawSupCode) : undefined;
+
+          const rawPeerCode = (raw.peer || raw.peerReviewerId || raw['کد پرسنلی ارزیاب همتا'] || '').trim().toUpperCase();
+          const peer = rawPeerCode ? employees.find(e => e.code.toUpperCase() === rawPeerCode || e.id === rawPeerCode) : undefined;
+
+          const rawApprCode = (raw.approver || raw.approverId || raw['کد پرسنلی تصویب‌کننده'] || '').trim().toUpperCase();
+          const approver = rawApprCode ? employees.find(e => e.code.toUpperCase() === rawApprCode || e.id === rawApprCode) : undefined;
+
+          const candidate = {
+            name,
+            code,
+            unit,
+            profileId,
+            role,
+            username,
+            supervisorId: supervisor?.id,
+            peerReviewerId: peer?.id,
+            approverId: approver?.id
+          };
+
+          const validation = validateEmployeeInput(candidate);
+          if (!validation.success) {
+            errors.push(`سطر ${rowNum} (${name || code || 'ناشناس'}): ${validation.errors.join('، ')}`);
+            return;
+          }
+
+          const validEmp = validation.data;
+          const existingIdx = newEmployeesList.findIndex(e => 
+            e.code.toUpperCase() === validEmp.code.toUpperCase() || 
+            e.username.toLowerCase() === validEmp.username.toLowerCase()
+          );
+
+          if (existingIdx >= 0) {
+            newEmployeesList[existingIdx] = { ...newEmployeesList[existingIdx], ...validEmp };
+            updatedCount++;
+          } else {
+            newEmployeesList.push({
+              id: `emp-${Math.random().toString(36).substring(2, 9)}`,
+              ...validEmp
+            });
+            createdCount++;
+          }
+          successCount++;
+        });
+
+        onSetEmployees(newEmployeesList);
+        addLog('ایمپورت پرسنل', `تعداد ${successCount} پرونده پرسنلی بارگذاری شد (${createdCount} جدید، ${updatedCount} به‌روزرسانی).`, 'success');
+      } else if (entityTarget === 'criteria') {
+        const newCriteriaList = mode === 'replace' ? [] : [...criteria];
+
+        rawItems.forEach((raw, idx) => {
+          const rowNum = idx + 1;
+          const rawCode = (raw.code || raw['کد شاخص'] || `C-${Math.floor(Math.random() * 1000)}`).trim().toUpperCase();
+          const rawName = (raw.name || raw['عنوان شاخص'] || 'شاخص شایستگی جدید').trim();
+          const rawCatStr = (raw.cat || raw['دسته‌بندی (K/B/Q/S/L)'] || raw['دسته‌بندی'] || 'K').toString().toUpperCase();
+          let rawCat: CategoryKey = 'K';
+          if (rawCatStr.startsWith('B')) rawCat = 'B';
+          else if (rawCatStr.startsWith('Q')) rawCat = 'Q';
+          else if (rawCatStr.startsWith('S')) rawCat = 'S';
+          else if (rawCatStr.startsWith('L')) rawCat = 'L';
+
+          const rawDef = (raw.def || raw['تعریف عملیاتی و سنجه'] || raw['تعریف عملیاتی'] || `تعریف عملیاتی شاخص ${rawName}`).trim();
+          const rawSource = (raw.source || raw['منبع داده و استخراج'] || raw['منبع داده'] || 'سیستم کارخانه').trim();
+          const rawMethod = (raw.method || raw['روش و فرمول سنجش'] || raw['روش سنجش'] || 'سنجش دوره‌ای').trim();
+          const rawDir = ((raw.dir || raw['جهت مطلوبیت (more/less)'] || raw['جهت مطلوبیت'] || 'more') === 'less' ? 'less' : 'more') as 'more' | 'less';
+
+          const candidate = {
+            code: rawCode,
+            name: rawName,
+            cat: rawCat,
+            def: rawDef,
+            source: rawSource,
+            method: rawMethod,
+            dir: rawDir
+          };
+
+          const validation = validateCriterionInput(candidate);
+          if (!validation.success) {
+            errors.push(`سطر ${rowNum} (${rawCode}): ${validation.errors.join('، ')}`);
+            return;
+          }
+
+          const validCrit = validation.data;
+          const existingIdx = newCriteriaList.findIndex(c => c.code.toUpperCase() === validCrit.code.toUpperCase());
+
+          if (existingIdx >= 0) {
+            newCriteriaList[existingIdx] = { ...newCriteriaList[existingIdx], ...validCrit };
+            updatedCount++;
+          } else {
+            newCriteriaList.push({
+              id: `crit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              ...validCrit
+            });
+            createdCount++;
+          }
+          successCount++;
+        });
+
+        onSetCriteria(newCriteriaList);
+        addLog('ایمپورت شاخص‌ها', `تعداد ${successCount} شاخص شایستگی ثبت گردید (${createdCount} جدید، ${updatedCount} به‌روزرسانی).`, 'success');
+      } else if (entityTarget === 'profiles') {
+        const newProfilesList = mode === 'replace' ? [] : [...profiles];
+
+        rawItems.forEach((raw, idx) => {
+          const rowNum = idx + 1;
+          const title = (raw.title || raw['عنوان رده شغلی'] || 'شغل جدید').trim();
+          const code = (raw.code || raw['کد شغل'] || `P-${Math.floor(Math.random() * 1000)}`).trim().toUpperCase();
+          const family = (raw.family || raw['خانواده شغلی'] || 'تولید و عملیات').trim();
+
+          let items: { cid: string; weight: number }[] = [];
+          if (Array.isArray(raw.items)) {
+            items = raw.items;
+          } else {
+            const summaryStr = (raw.itemsSummary || raw['شاخص‌ها و اوزان شایستگی'] || raw['شاخص‌ها و اوزان'] || '').toString();
+            if (summaryStr) {
+              const segments = summaryStr.split(/[|,;]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0);
+              segments.forEach((seg: string) => {
+                const match = seg.match(/^([A-Za-z0-9\-_]+)\s*\(?\s*(\d+)\s*%?\)?/);
+                if (match) {
+                  const critCode = match[1].trim();
+                  const weight = parseInt(match[2], 10);
+                  const matchedCrit = criteria.find(c => c.code.toLowerCase() === critCode.toLowerCase() || c.id === critCode);
+                  if (matchedCrit) {
+                    items.push({ cid: matchedCrit.id, weight });
+                  }
+                }
+              });
+            }
+
+            if (items.length === 0) {
+              const safetyCrit = criteria.find(c => c.code === 'B-HSE-01' || c.cat === 'B') || criteria[0];
+              if (safetyCrit) items = [{ cid: safetyCrit.id, weight: 100 }];
+            }
+          }
+
+          const candidate = {
+            title,
+            code,
+            family,
+            items,
+            locked: Boolean(raw.locked || (raw['وضعیت تصویب'] && raw['وضعیت تصویب'].includes('تصویب')))
+          };
+
+          const validation = validateJobProfileInput(candidate);
+          if (!validation.success) {
+            errors.push(`سطر ${rowNum} (${title} - ${code}): ${validation.errors.join('، ')}`);
+            return;
+          }
+
+          const validProf = validation.data;
+          const existingIdx = newProfilesList.findIndex(p => p.code.toUpperCase() === validProf.code.toUpperCase());
+
+          if (existingIdx >= 0) {
+            newProfilesList[existingIdx] = { ...newProfilesList[existingIdx], ...validProf };
+            updatedCount++;
+          } else {
+            newProfilesList.push({
+              id: `prof-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              ...validProf
+            });
+            createdCount++;
+          }
+          successCount++;
+        });
+
+        onSetProfiles(newProfilesList);
+        addLog('ایمپورت پروفایل‌های شغلی', `تعداد ${successCount} الگوی شغلی ثبت شد (${createdCount} جدید، ${updatedCount} به‌روزرسانی).`, 'success');
+      } else if (entityTarget === 'evaluations') {
+        const newEvaluationsList = mode === 'replace' ? [] : [...evaluations];
+
+        rawItems.forEach((raw, idx) => {
+          const rowNum = idx + 1;
+          const empCode = (raw.empCode || raw['کد پرسنلی همکار'] || raw.empId || '').toString().trim().toUpperCase();
+          const matchedEmp = employees.find(e => e.code.toUpperCase() === empCode || e.id === empCode);
+          if (!matchedEmp) {
+            errors.push(`سطر ${rowNum}: کد پرسنلی «${empCode}» در سامانه یافت نشد.`);
+            return;
+          }
+
+          const period = (raw.period || raw['دوره ارزیابی'] || 'ارزیابی دوره جاری').trim();
+          const profId = matchedEmp.profileId || profiles[0]?.id || 'prof-1';
+          const prof = profiles.find(p => p.id === profId);
+
+          const scores = prof ? prof.items.map(item => ({
+            cid: item.cid,
+            weight: item.weight,
+            value: 4,
+            self: 4,
+            doc: ''
+          })) : [];
+
+          const newEval: Evaluation = {
+            id: `eval-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            empId: matchedEmp.id,
+            profileId: profId,
+            period,
+            status: 'draft',
+            scores,
+            note: raw.note || raw.growthNotes || raw['یادداشت‌های توسعه و مربیگری'] || '',
+            created: Date.now()
+          };
+
+          newEvaluationsList.push(newEval);
+          createdCount++;
+          successCount++;
+        });
+
+        onSetEvaluations(newEvaluationsList);
+        addLog('ایمپورت ارزیابی‌ها', `تعداد ${successCount} رکورد ارزیابی جدید ثبت گردید.`, 'success');
+      }
+
+      setImportFeedback({
+        success: true,
+        title: 'عملیات با موفقیت انجام شد',
+        message: `تعداد ${successCount} رکورد با موفقیت پردازش شد (${createdCount} مورد جدید ایجاد شد و ${updatedCount} مورد به‌روزرسانی گردید).`,
+        errors: errors.length > 0 ? errors : undefined,
+        stats: { count: successCount, created: createdCount, updated: updatedCount }
+      });
+      setRawImportText('');
+    } catch (err: any) {
+      setImportFeedback({
+        success: false,
+        title: 'خطا در پردازش فایل یا متن ارسالی',
+        message: err.message || 'فرمت داده‌های ورودی نامعتبر است. لطفاً ساختار داده‌ها را بر اساس نمونه الگو بررسی فرمایید.'
+      });
+    } finally {
+      setIsProcessingImport(false);
     }
   };
 
-  // --- OFFLINE STANDALONE HTML EXPORT ---
-  const handleExportOfflineHTML = () => {
-    const appData = {
-      employees,
-      profiles,
-      criteria,
-      evaluations,
-      permissions
-    };
-
-    const htmlString = `<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head>
-  <meta charset="UTF-8">
-  <title>داشبورد آفلاین کارنامه شایستگی - شرکت تولیدی و صنعتی اصفهان چالاک</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600;700;900&display=swap');
-    body { font-family: 'Vazirmatn', sans-serif; }
-  </style>
-</head>
-<body class="bg-slate-950 text-slate-100 min-h-screen p-6">
-  <div class="max-w-6xl mx-auto space-y-6">
-    <div class="bg-slate-900 border border-slate-800 p-6 rounded-3xl flex items-center justify-between shadow-2xl">
-      <div>
-        <h1 class="text-xl font-black text-teal-400">کارنامه و سامانه آفلاین ارزیابی عملکرد</h1>
-        <p class="text-xs text-slate-400 mt-1">شرکت تولیدی و صنعتی اصفهان چالاک • نسخه مستقل ۱۰۰٪ آفلاین دسکتاپ</p>
-      </div>
-      <div class="bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs px-3 py-1.5 rounded-xl font-bold">
-        تعداد پرسنل: ${employees.length} نفر
-      </div>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div class="bg-slate-900/60 border border-slate-800 p-4 rounded-2xl">
-        <span class="text-xs text-slate-400">تعداد ارزیابی‌های ثبت‌شده</span>
-        <h3 class="text-2xl font-black text-slate-100 mt-1">${evaluations.length}</h3>
-      </div>
-      <div class="bg-slate-900/60 border border-slate-800 p-4 rounded-2xl">
-        <span class="text-xs text-slate-400">تعداد شایستگی‌های تعریف‌شده</span>
-        <h3 class="text-2xl font-black text-teal-400 mt-1">${criteria.length}</h3>
-      </div>
-      <div class="bg-slate-900/60 border border-slate-800 p-4 rounded-2xl">
-        <span class="text-xs text-slate-400">تعداد ایستگاه‌های شغلی</span>
-        <h3 class="text-2xl font-black text-indigo-400 mt-1">${profiles.length}</h3>
-      </div>
-    </div>
-
-    <div class="bg-slate-900/40 border border-slate-800 rounded-3xl p-5 space-y-4">
-      <h2 class="text-sm font-bold text-slate-200">فهرست پرسنل و کارنامه عملکرد</h2>
-      <div class="overflow-x-auto">
-        <table class="w-full text-right text-xs">
-          <thead>
-            <tr class="text-slate-400 border-b border-slate-800">
-              <th class="p-3">نام و نام خانوادگی</th>
-              <th class="p-3">کد پرسنلی</th>
-              <th class="p-3">واحد سازمانی</th>
-              <th class="p-3">نقش سازمانی</th>
-              <th class="p-3 text-center">مشاهده جزئیات</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-800/40 text-slate-300">
-            ${employees.map(emp => `
-              <tr class="hover:bg-slate-800/20">
-                <td class="p-3 font-bold text-slate-100">${emp.name}</td>
-                <td class="p-3 font-mono text-teal-400">${emp.code}</td>
-                <td class="p-3 text-slate-400">${emp.unit}</td>
-                <td class="p-3">
-                  <span class="px-2 py-0.5 rounded-full text-[10px] ${emp.role === 'admin' ? 'bg-rose-500/10 text-rose-300' : emp.role === 'supervisor' ? 'bg-amber-500/10 text-amber-300' : 'bg-teal-500/10 text-teal-300'}">
-                    ${emp.role === 'admin' ? 'مدیر سیستم' : emp.role === 'supervisor' ? 'سرپرست خط' : 'اپراتور'}
-                  </span>
-                </td>
-                <td class="p-3 text-center">
-                  <button onclick="showDetails('${emp.id}')" class="bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 px-3 py-1 rounded-lg text-xs font-bold transition-all">مشاهده کارنامه</button>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div id="details-panel" class="hidden bg-slate-900 border border-teal-500/40 rounded-3xl p-6 space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 id="det-name" class="text-base font-bold text-teal-300">کارنامه همکار</h3>
-        <button onclick="document.getElementById('details-panel').classList.add('hidden')" class="text-xs text-slate-400 hover:text-slate-200">بستن ✕</button>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-        <div class="p-3 bg-slate-950 rounded-xl">کد پرسنلی: <span id="det-code" class="font-mono text-teal-400"></span></div>
-        <div class="p-3 bg-slate-950 rounded-xl">واحد: <span id="det-unit" class="text-slate-200"></span></div>
-        <div class="p-3 bg-slate-950 rounded-xl">امتیاز کل: <span id="det-score" class="font-bold text-teal-400"></span></div>
-      </div>
-      <div class="p-4 bg-slate-950 rounded-2xl border border-slate-800">
-        <h4 class="text-xs font-bold text-slate-400 mb-2">بازخورد مربیگری و برنامه اقدام توسعه:</h4>
-        <p id="det-coaching" class="text-xs text-slate-300 leading-relaxed whitespace-pre-line"></p>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const data = ${JSON.stringify(appData)};
-
-    function showDetails(empId) {
-      const emp = data.employees.find(e => e.id === empId);
-      if (!emp) return;
-
-      document.getElementById('det-name').innerText = 'کارنامه ارزیابی: ' + emp.name;
-      document.getElementById('det-code').innerText = emp.code;
-      document.getElementById('det-unit').innerText = emp.unit;
-
-      const ev = data.evaluations.find(e => e.empId === empId);
-      if (ev) {
-        let total = 0;
-        let sumWeights = 0;
-        ev.scores.forEach(s => {
-          total += (s.value || 0) * (s.weight || 10);
-          sumWeights += (s.weight || 10);
-        });
-        const finalScore = sumWeights > 0 ? ((total / (sumWeights * 5)) * 100).toFixed(1) : '۰';
-        document.getElementById('det-score').innerText = finalScore + ' از ۱۰۰';
-
-        if (ev.aiFeedback) {
-          const fb = ev.aiFeedback;
-          const summaryText = typeof fb === 'string' ? fb : fb.summary;
-          const bulletList = fb.actionItems ? '\\n\\nبرنامه اقدام توسعه:\\n' + fb.actionItems.map(a => '- ' + a).join('\\n') : '';
-          document.getElementById('det-coaching').innerText = summaryText + bulletList;
-        } else {
-          document.getElementById('det-coaching').innerText = 'ارزیابی ثبت شده ولی بازخورد مربیگری صادر نشده است.';
-        }
-      } else {
-        document.getElementById('det-score').innerText = 'ثبت نشده';
-        document.getElementById('det-coaching').innerText = 'هیچ ارزیابی برای این همکار تا این لحظه ثبت نگردیده است.';
-      }
-
-      document.getElementById('details-panel').classList.remove('hidden');
-      document.getElementById('details-panel').scrollIntoView({ behavior: 'smooth' });
+  // 6. INDUSTRIAL DEMO DATASET LOADER (RICH WORKSHOP ROSTER)
+  const handleLoadIndustrialDemoDataset = () => {
+    if (!window.confirm('آیا از بارگذاری بسته داده‌های استاندارد کارخانه اطمینان دارید؟ داده‌های نمونه غنی به سامانه افزوده خواهند شد.')) {
+      return;
     }
-  </script>
-</body>
-</html>`;
 
-    const blob = new Blob([htmlString], { type: 'text/html;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'chalak_performance_offline_dashboard.html');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    addLog('صدور آفلاین رکوردهای سیستم', 'دانلود نسخه دبل‌کلیک آفلاین و مستقل کل سیستم ارزیابی کارخانه', 'success');
+    const demoCriteria: Criterion[] = [
+      { id: 'crit-demo-1', code: 'K-PRD-01', cat: 'K', name: 'درصد تحقق برنامه تولید خط مونتاژ', def: 'نسبت تیراژ قطعات سالم تولیدشده به برنامه مصوب شیفت', source: 'سیستم MES و کارت تولید', method: 'فرمول درصدی تولید واقعی به برنامه', dir: 'more' },
+      { id: 'crit-demo-2', code: 'K-QC-01', cat: 'K', name: 'شاخص کیفیت قطعه و PPM ضایعات', def: 'تعداد قطعات معیوب در هر یک میلیون قطعه تولیدی', source: 'ایستگاه کنترل کیفیت QC', method: 'شاخص آماری PPM', dir: 'less' },
+      { id: 'crit-demo-3', code: 'K-OEE-01', cat: 'K', name: 'اثربخشی کلی تجهیزات (OEE)', def: 'محاسبه همزمان در دسترس بودن ماشین‌آلات، عملکرد و کیفیت', source: 'سیستم نگهداری و تعمیرات PM', method: 'فرمول استاندارد OEE', dir: 'more' },
+      { id: 'crit-demo-4', code: 'B-HSE-01', cat: 'B', name: 'رعایت پروتکل‌های ایمنی، PPE و ۵اس', def: 'استفاده مستمر از کلاه، دستکش، عینک ایمنی و رعایت تفکیک ضایعات', source: 'ممیزی‌های تصادفی افسر ایمنی HSE', method: 'مقیاس ۵ سطحی کیفی', dir: 'more' },
+      { id: 'crit-demo-5', code: 'B-TEAM-01', cat: 'B', name: 'همکاری بین‌فردی و کار تیمی کارگاهی', def: 'مشارکت موثر در تحویل شیفت، حل مسئله خط و کمک به همکاران', source: 'نظرسنجی همتایان و تایید سرپرست', method: 'مقیاس ۵ سطحی شایستگی', dir: 'more' },
+      { id: 'crit-demo-6', code: 'B-5S-01', cat: 'B', name: 'نظم و آراستگی محیط کارگاهی (5S)', def: 'ساماندهی، پاکیزه‌سازی، استانداردسازی و حفظ انضباط ابزارآلات', source: 'چک‌لیست هفتگی ۵اس', method: 'نمره ۱ تا ۵ چک‌لیست', dir: 'more' }
+    ];
+
+    const demoProfiles: JobProfile[] = [
+      {
+        id: 'prof-demo-1',
+        title: 'اپراتور ارشد تراشکاری و فرز CNC',
+        code: 'OP-CNC-01',
+        family: 'فنی و مهندسی',
+        locked: true,
+        items: [
+          { cid: 'crit-demo-1', weight: 25 },
+          { cid: 'crit-demo-2', weight: 25 },
+          { cid: 'crit-demo-3', weight: 15 },
+          { cid: 'crit-demo-4', weight: 20 },
+          { cid: 'crit-demo-5', weight: 15 }
+        ]
+      },
+      {
+        id: 'prof-demo-2',
+        title: 'سرپرست تولید و ماشین‌کاری خطوط صنعتی',
+        code: 'SUP-PRD-01',
+        family: 'تولید و عملیات',
+        locked: true,
+        items: [
+          { cid: 'crit-demo-1', weight: 30 },
+          { cid: 'crit-demo-3', weight: 25 },
+          { cid: 'crit-demo-4', weight: 25 },
+          { cid: 'crit-demo-5', weight: 20 }
+        ]
+      },
+      {
+        id: 'prof-demo-3',
+        title: 'کارشناس ارشد تضمین و کنترل کیفیت (QA/QC)',
+        code: 'ENG-QC-01',
+        family: 'کیفیت و آزمایشگاه',
+        locked: true,
+        items: [
+          { cid: 'crit-demo-2', weight: 35 },
+          { cid: 'crit-demo-4', weight: 25 },
+          { cid: 'crit-demo-5', weight: 20 },
+          { cid: 'crit-demo-6', weight: 20 }
+        ]
+      }
+    ];
+
+    const demoEmployees: Employee[] = [
+      { id: 'emp-demo-1', name: 'مهندس کامران صباغی', code: 'EMP-1000', unit: 'سالن ماشین‌کاری ۱', profileId: 'prof-demo-2', role: 'supervisor', username: 'kamran' },
+      { id: 'emp-demo-2', name: 'مهندس علی رضایی', code: 'EMP-1001', unit: 'سالن ماشین‌کاری ۱', profileId: 'prof-demo-1', role: 'employee', username: 'ali_rezaei', supervisorId: 'emp-demo-1' },
+      { id: 'emp-demo-3', name: 'مهندس سارا عباسی', code: 'EMP-1002', unit: 'واحد کنترل کیفیت QC', profileId: 'prof-demo-3', role: 'employee', username: 'sara_abbasi', supervisorId: 'emp-demo-1' },
+      { id: 'emp-demo-4', name: 'مهندس رضا کریمی', code: 'EMP-1003', unit: 'سالن ماشین‌کاری ۱', profileId: 'prof-demo-1', role: 'employee', username: 'reza_karimi', supervisorId: 'emp-demo-1' },
+      { id: 'emp-demo-5', name: 'مهندس نیلوفر شفیعی', code: 'EMP-1004', unit: 'واحد کنترل کیفیت QC', profileId: 'prof-demo-3', role: 'employee', username: 'shafiei', supervisorId: 'emp-demo-1' }
+    ];
+
+    onSetCriteria(demoCriteria);
+    onSetProfiles(demoProfiles);
+    onSetEmployees(demoEmployees);
+
+    addLog('بارگذاری دیتای استاندارد صنعتی', 'بسته داده‌های غنی کارخانه‌ای (شاخص‌ها، پروفایل‌ها و پرسنل) با موفقیت در سامانه بارگذاری شد.', 'success');
+    setImportFeedback({
+      success: true,
+      title: 'بسته داده‌های نمونه کارخانه با موفقیت بارگذاری شد',
+      message: 'تعداد ۶ شاخص شایستگی پیشرفته، ۳ پروفایل استاندارد و ۵ پرسنل خطوط تولید با موفقیت در دیتابیس ثبت شدند.'
+    });
+  };
+
+  // 7. GENERATE HIGH-LOAD BENCHMARK RECORDS (>500 RECORDS)
+  const handleGenerateScaleBenchmark = (count: number) => {
+    if (!window.confirm(`آیا تمایل به تولید ${count} پرونده پرسنلی برای سنجش سرعت، جدول مجازی‌سازی و پایداری سامانه دارید؟`)) {
+      return;
+    }
+
+    const firstProfId = profiles[0]?.id || 'prof-1';
+    const benchmarkEmps: Employee[] = [];
+    const units = ['سالن ماشین‌کاری ۱', 'سالن ماشین‌کاری ۲', 'سالن مونتاژ و بسته‌بندی', 'واحد کنترل کیفیت', 'تعمیرات و نگهداری PM', 'مهندسی فرآیند'];
+    const firstNames = ['علی', 'محمد', 'رضا', 'حسین', 'امیر', 'مهدی', 'علیرضا', 'فرشید', 'کامران', 'پوریا', 'زهرا', 'مریم', 'فاطمه', 'سارا', 'نرگس'];
+    const lastNames = ['رضایی', 'کریمی', 'حسینی', 'احمدی', 'محمدی', 'قاسمی', 'صباغی', 'نجفی', 'موسوی', 'اکبری', 'تقوی', 'مرادی', 'شریفی'];
+
+    for (let i = 1; i <= count; i++) {
+      const fn = firstNames[Math.floor(Math.random() * firstNames.length)];
+      const ln = lastNames[Math.floor(Math.random() * lastNames.length)];
+      const unit = units[Math.floor(Math.random() * units.length)];
+      const empNum = (2000 + i).toString();
+      benchmarkEmps.push({
+        id: `bench-${Date.now()}-${i}`,
+        name: `${fn} ${ln}`,
+        code: `BENCH-${empNum}`,
+        unit,
+        profileId: profiles[i % profiles.length]?.id || firstProfId,
+        role: i % 15 === 0 ? 'supervisor' : 'employee',
+        username: `bench_${empNum}`
+      });
+    }
+
+    onSetEmployees([...employees, ...benchmarkEmps]);
+    addLog('تولید داده‌های کلان بنچمارک', `تعداد ${count} پرسنل برای سنجش توان پردازش کلان سامانه اضافه شدند.`, 'warning');
+    setImportFeedback({
+      success: true,
+      title: 'داده‌های کلان بنچمارک با موفقیت تزریق شدند',
+      message: `تعداد ${count} رکورد به لیست پرسنل اضافه شد. اکنون می‌توانید کارایی جداول مجازی‌سازی و خروجی‌های اکسل را پایش فرمایید.`
+    });
   };
 
   return (
@@ -996,15 +1555,10 @@ export default function ManagementCenter({
                     <p className="text-[10px] text-slate-400">تنظیم رمز اختصاصی ورود به پرتال مدیریت ارشد</p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleResetAdminPasswordDirect}
-                  className="text-[10px] font-bold text-rose-300 hover:text-white bg-rose-500/10 hover:bg-rose-500/20 px-2.5 py-1.5 rounded-lg border border-rose-500/20 flex items-center gap-1 transition-all cursor-pointer"
-                  title="بازنشانی رمز عبور به پیش‌فرض (admin)"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>بازنشانی به پیش‌فرض (admin)</span>
-                </button>
+                <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400 bg-rose-500/10 px-2.5 py-1 rounded-full border border-rose-500/20">
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>تأیید هویت الزامی</span>
+                </div>
               </div>
 
               {passwordFeedback && (
@@ -1079,72 +1633,73 @@ export default function ManagementCenter({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-[10px] text-slate-500">
-                    💡 با تغییر رمز، ورود به پرتال با کلمه عبور جدید صورت می‌پذیرد.
-                  </span>
+                <div className="flex items-center justify-between pt-2">
+                  <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>حداقل ۶ کاراکتر ترکیبی</span>
+                  </div>
                   <button
                     type="submit"
-                    className="bg-rose-500 hover:bg-rose-600 text-slate-50 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-rose-500/20 cursor-pointer"
+                    className="bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shadow-rose-600/20 cursor-pointer"
                   >
                     <Lock className="w-3.5 h-3.5" />
-                    <span>ذخیره کلمه عبور جدید</span>
+                    <span>بروزرسانی کلمه عبور مدیریت</span>
                   </button>
                 </div>
               </form>
             </div>
 
-            {/* 2. MASTER EMERGENCY RECOVERY & BREAK-GLASS PROTOCOL CARD */}
-            <div className="lg:col-span-6 bg-gradient-to-br from-slate-900 to-amber-950/20 border border-amber-500/30 rounded-3xl p-5 space-y-4 shadow-lg flex flex-col justify-between">
+            {/* 2. SECURITY HARDENING, AUDIT & ACCESS POLICY STATUS CARD */}
+            <div className="lg:col-span-6 bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/20 border border-emerald-500/30 rounded-3xl p-5 space-y-4 shadow-lg flex flex-col justify-between">
               <div className="space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                      <ShieldAlert className="w-5 h-5" />
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                      <ShieldCheck className="w-5 h-5" />
                     </div>
                     <div>
-                      <h2 className="text-sm font-black text-amber-300">پروتکل کلید طلایی و بازیابی اضطراری (Break-Glass)</h2>
-                      <p className="text-[10px] text-slate-400">حساب ویژه و قطعی جهت مواقع فراموشی رمز ادمین</p>
+                      <h2 className="text-sm font-black text-emerald-300">وضعیت ایمنی و ممیزی دسترسی مدیریت</h2>
+                      <p className="text-[10px] text-slate-400">حفاظت چندلایه‌ای از حساب‌ها و نشست‌های ادمین</p>
                     </div>
                   </div>
-                  <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
-                    فعال و ایمن
+                  <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" />
+                    فعال و ایمن‌سازی شده
                   </span>
                 </div>
 
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  چنانچه کلمه عبور اختصاصی مدیر سیستم تغییر یافته و فراموش شود، با استفاده از نام کاربری و کلید طلایی زیر می‌توانید در هر زمان به پرتال ادمین وارد شده و رمزها را بازنشانی فرمایید.
+                  تمامی تدابیر امنیتی جهت ممانعت از نفوذ غیرمجاز به پرتال مدیریت فعال گردیده‌اند:
                 </p>
 
-                {/* Master Credentials Box */}
-                <div className="bg-slate-950/90 border border-amber-500/20 rounded-2xl p-3.5 space-y-2 text-xs font-mono">
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400 font-sans text-[11px]">نام کاربری کلید طلایی:</span>
-                    <span className="text-teal-300 font-bold bg-teal-500/10 px-2.5 py-0.5 rounded-md border border-teal-500/20">master</span>
+                {/* Security Metrics and Audit Features */}
+                <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-3.5 space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                    <span className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                      وضعیت احراز هویت مدیریت:
+                    </span>
+                    <span className="text-emerald-400 font-bold text-[11px]">منحصراً با کلمه عبور معتبر</span>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400 font-sans text-[11px]">کلید امنیتی اضطراری:</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-amber-300 font-bold bg-amber-500/10 px-2.5 py-0.5 rounded-md border border-amber-500/20">Chalak@2026#Master</span>
-                      <button
-                        type="button"
-                        onClick={handleCopyMasterKey}
-                        className="text-slate-400 hover:text-slate-200 p-1 bg-slate-800 rounded-lg cursor-pointer"
-                        title="کپی کلید طلایی"
-                      >
-                        {copiedMasterKey ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                      </button>
-                    </div>
+                  <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                    <span className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                      سیستم ضد نفوذ Brute-Force:
+                    </span>
+                    <span className="text-indigo-300 font-bold text-[11px]">قفل خودکار ۶۰ ثانیه‌ای پس از ۵ تلاش ناموفق</span>
                   </div>
-                  <div className="flex justify-between items-center text-[10px] text-slate-500 font-sans pt-1 border-t border-slate-900">
-                    <span>کد عددی سریع:</span>
-                    <span className="font-mono text-slate-400 font-bold">999999</span>
+                  <div className="flex justify-between items-center py-1">
+                    <span className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-teal-400" />
+                      ثبت لاگ ممیزی رخدادها (Audit Trail):
+                    </span>
+                    <span className="text-teal-300 font-bold text-[11px] font-mono">{logs.length} رویداد ثبت‌شده</span>
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between text-[11px] text-amber-400/80 pt-1">
-                <span>🛡️ کلید طلایی به صورت پیش‌فرض در هسته سیستم فعال و محافظت‌شده است.</span>
+              <div className="flex items-center justify-between text-[11px] text-emerald-400/90 pt-1">
+                <span>🛡️ کلیدهای دسترسی منحصراً در اختیار مدیریت مجاز سازمان قرار دارد.</span>
               </div>
             </div>
 
@@ -1801,159 +2356,670 @@ export default function ManagementCenter({
       )}
 
       {/* ========================================================================= */}
-      {/* SECTION 3: BACKUP, EXCEL/CSV IMPORT & OFFLINE STANDALONE HTML EXPORT      */}
+      {/* SECTION 3: ENTERPRISE DATA MANAGEMENT, BULK IMPORT/EXPORT & BACKUP HUB    */}
       {/* ========================================================================= */}
       {(activeSectionTab === 'backup' || activeSectionTab === 'all') && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          
-          {/* EXCEL INTEGRATION CARD (KASRA & MIS) */}
-          <div className="lg:col-span-12 bg-gradient-to-r from-slate-900 to-teal-950/40 border border-teal-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
-                  <FileSpreadsheet className="w-5 h-5" />
+        <div className="space-y-6">
+
+          {/* 1. TOP HEADER & METRIC SUMMARY CARDS */}
+          <div className="bg-gradient-to-r from-slate-900 via-teal-950/40 to-slate-900 border border-teal-500/30 rounded-3xl p-6 shadow-xl">
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400 shrink-0">
+                  <Database className="w-6 h-6" />
                 </div>
                 <div>
-                  <h2 className="text-base font-black text-slate-100 flex items-center gap-2">
-                    <span>یکپارچه‌سازی و ورود داده از اکسل (سامانه کسری و سامانه MIS)</span>
-                    <span className="text-[10px] bg-teal-500/20 text-teal-300 font-semibold px-2 py-0.5 rounded-full font-mono">Excel Sync</span>
-                  </h2>
-                  <p className="text-xs text-teal-300 mt-0.5">دریافت فایل‌های حضور/غیاب کسری و آمار تولید/کیفیت MIS و اعمال خودکار بر نمرات ارزیابی</p>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-black text-slate-100">مرکز جامع تبادل و انتقال کلان داده‌های سازمانی (Data Hub)</h2>
+                    <span className="text-[10px] font-bold bg-teal-500/20 text-teal-300 border border-teal-500/30 px-2.5 py-0.5 rounded-full font-mono">
+                      v4.0 Enterprise
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    پشتیبان‌گیری کامل، ورود و خروجی گروهی اکسل (CSV با کدگذاری UTF-8 BOM) و مهاجرت داده‌های کلان پرسنل، شاخص‌ها و پروفایل‌ها
+                  </p>
                 </div>
               </div>
-              <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
-                با استفاده از این ابزار، می‌توانید قالب‌های اکسل رسمی را دانلود کرده، داده‌های ساعات کارکرد، تاخیر، غیبت، راندمان تولید و ضایعات را بارگذاری نموده و محاسبات دقیق ۱ تا ۵ را مستقیماً در فرم‌های ارزیابی عملکرد پرسنل بنشانید.
-              </p>
+
+              {/* Top Quick Actions */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleExportFullBackupJSON}
+                  className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-teal-500/20 cursor-pointer shrink-0"
+                >
+                  <Download className="w-4 h-4 text-slate-950 stroke-[2.5]" />
+                  <span>دانلود پشتیبان کامل (JSON)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsExcelIntegrationOpen(true)}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 transition-all border border-slate-700 cursor-pointer shrink-0"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                  <span>اکسل سامانه کسری / MIS</span>
+                </button>
+              </div>
             </div>
 
+            {/* LIVE ENTITY REGISTRY TILES */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-6">
+              {/* Tile 1: Employees */}
+              <div className="bg-slate-950/60 border border-slate-800 hover:border-teal-500/40 rounded-2xl p-4 transition-all">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Users className="w-3.5 h-3.5 text-indigo-400" />
+                    پرسنل و همکاران
+                  </span>
+                  <span className="font-mono text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">Employees</span>
+                </div>
+                <div className="text-xl font-black text-slate-100 mt-2 font-mono">{employees.length}</div>
+                <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-slate-800/80">
+                  <button
+                    onClick={() => handleExportEntityCSV('employees')}
+                    className="text-[11px] text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1 cursor-pointer"
+                    title="دانلود فایل اکسل CSV پرسنل"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>CSV</span>
+                  </button>
+                  <span className="text-slate-600">|</span>
+                  <button
+                    onClick={() => handleExportEntityJSON('employees')}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 cursor-pointer"
+                    title="دانلود فایل JSON پرسنل"
+                  >
+                    <FileJson className="w-3 h-3" />
+                    <span>JSON</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tile 2: Criteria */}
+              <div className="bg-slate-950/60 border border-slate-800 hover:border-teal-500/40 rounded-2xl p-4 transition-all">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Sliders className="w-3.5 h-3.5 text-teal-400" />
+                    بانک شاخص‌ها
+                  </span>
+                  <span className="font-mono text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">Criteria</span>
+                </div>
+                <div className="text-xl font-black text-slate-100 mt-2 font-mono">{criteria.length}</div>
+                <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-slate-800/80">
+                  <button
+                    onClick={() => handleExportEntityCSV('criteria')}
+                    className="text-[11px] text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>CSV</span>
+                  </button>
+                  <span className="text-slate-600">|</span>
+                  <button
+                    onClick={() => handleExportEntityJSON('criteria')}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <FileJson className="w-3 h-3" />
+                    <span>JSON</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tile 3: Profiles */}
+              <div className="bg-slate-950/60 border border-slate-800 hover:border-teal-500/40 rounded-2xl p-4 transition-all">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Boxes className="w-3.5 h-3.5 text-amber-400" />
+                    پروفایل‌های شغلی
+                  </span>
+                  <span className="font-mono text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">Profiles</span>
+                </div>
+                <div className="text-xl font-black text-slate-100 mt-2 font-mono">{profiles.length}</div>
+                <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-slate-800/80">
+                  <button
+                    onClick={() => handleExportEntityCSV('profiles')}
+                    className="text-[11px] text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>CSV</span>
+                  </button>
+                  <span className="text-slate-600">|</span>
+                  <button
+                    onClick={() => handleExportEntityJSON('profiles')}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <FileJson className="w-3 h-3" />
+                    <span>JSON</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tile 4: Evaluations */}
+              <div className="bg-slate-950/60 border border-slate-800 hover:border-teal-500/40 rounded-2xl p-4 transition-all">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Award className="w-3.5 h-3.5 text-rose-400" />
+                    سوابق ارزیابی
+                  </span>
+                  <span className="font-mono text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">Evaluations</span>
+                </div>
+                <div className="text-xl font-black text-slate-100 mt-2 font-mono">{evaluations.length}</div>
+                <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-slate-800/80">
+                  <button
+                    onClick={() => handleExportEntityCSV('evaluations')}
+                    className="text-[11px] text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>CSV</span>
+                  </button>
+                  <span className="text-slate-600">|</span>
+                  <button
+                    onClick={() => handleExportEntityJSON('evaluations')}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <FileJson className="w-3 h-3" />
+                    <span>JSON</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. SUB-NAVIGATION FOR DATA HUB */}
+          <div className="flex items-center gap-2 border-b border-slate-800 pb-3 overflow-x-auto">
             <button
-              onClick={() => setIsExcelIntegrationOpen(true)}
-              className="bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black py-3.5 px-6 rounded-2xl text-xs flex items-center justify-center gap-2.5 transition-all cursor-pointer shadow-lg shadow-teal-500/20 shrink-0"
+              type="button"
+              onClick={() => setDataHubActiveView('hub')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
+                dataHubActiveView === 'hub'
+                  ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
+                  : 'bg-slate-900/60 text-slate-400 hover:text-slate-200 border border-slate-800'
+              }`}
             >
-              <FileSpreadsheet className="w-4 h-4 text-slate-950" />
-              <span>باز کردن مرکز ورود داده‌های کسری و MIS</span>
+              <Upload className="w-3.5 h-3.5" />
+              <span>کنسول ورود و ایمپورت داده‌ها (Import Engine)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDataHubActiveView('export')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
+                dataHubActiveView === 'export'
+                  ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
+                  : 'bg-slate-900/60 text-slate-400 hover:text-slate-200 border border-slate-800'
+              }`}
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>کنسول خروجی و فایل‌های الگو (Export & Templates)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDataHubActiveView('tools')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
+                dataHubActiveView === 'tools'
+                  ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
+                  : 'bg-slate-900/60 text-slate-400 hover:text-slate-200 border border-slate-800'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>داده‌های استاندارد کارخانه و تست مقیاس (Data Sandbox)</span>
             </button>
           </div>
 
-          {/* CLOUDFLARE CLOUD PERSISTENCE & SYNC STATUS */}
-          <div className="lg:col-span-12 bg-gradient-to-r from-slate-900 via-teal-950/30 to-slate-900 border border-teal-500/30 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
-                  <Database className="w-5 h-5" />
+          {/* 3. FEEDBACK NOTIFICATION BANNER */}
+          {importFeedback && (
+            <div className={`p-4 rounded-2xl border text-xs leading-relaxed space-y-2 animate-in fade-in ${
+              importFeedback.success 
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
+                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-black text-sm">
+                  {importFeedback.success ? <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" /> : <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />}
+                  <span>{importFeedback.title}</span>
                 </div>
-                <div>
-                  <h2 className="text-base font-black text-slate-100">پایگاه داده ابری متمرکز کلادفلر (Cloud Native Persistence)</h2>
-                  <p className="text-xs text-teal-300 mt-0.5">همگام‌سازی بلادرنگ داده‌ها بین کلیه سرپرستان، کارمندان و مدیریت ارشد</p>
-                </div>
-              </div>
-              <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
-                تمامی سوابق ارزیابی، احکام، فرمول‌های شایستگی و گردش کارها به طور آنی بر روی سرور ذخیره می‌شوند. هر کاربر با نقش و حساب مجزا وارد سامانه شده و تغییرات همزمان در کل کارخانه منعکس می‌گردد.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="px-4 py-3 rounded-2xl bg-slate-950/80 border border-teal-500/30 flex items-center gap-3 text-xs">
-                <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping" />
-                <div>
-                  <p className="font-bold text-slate-200">وضعیت اتصال ابری</p>
-                  <p className="text-[10px] text-emerald-400 font-mono">Cloud Sync: Connected (Active)</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* EXCEL / CSV BULK IMPORT */}
-          <div className="lg:col-span-6 bg-slate-800/30 border border-slate-800 rounded-3xl p-5 space-y-4 shadow-lg">
-            <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-              <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-              <div>
-                <h2 className="text-sm font-bold text-slate-200">ورود گروهی پرسنل از اکسل (CSV)</h2>
-                <p className="text-[10px] text-slate-400">کپی و پیست مستقیم یا بارگذاری دسته‌جمعی پرسنل</p>
-              </div>
-            </div>
-
-            {csvFeedback && (
-              <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
-                csvFeedback.success ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
-              }`}>
-                {csvFeedback.success ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
-                <span>{csvFeedback.message}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleImportCSV} className="space-y-3">
-              <textarea
-                rows={5}
-                value={csvText}
-                onChange={(e) => setCsvText(e.target.value)}
-                placeholder="نام و نام خانوادگی,کد پرسنلی,واحد سازمانی,عنوان شایستگی ایستگاه,نام کاربری,نقش"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-emerald-500 leading-relaxed"
-              />
-
-              <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
-                  onClick={handleDownloadSampleCSV}
-                  className="text-slate-400 hover:text-slate-200 text-xs flex items-center gap-1 cursor-pointer"
+                  onClick={() => setImportFeedback(null)}
+                  className="text-slate-400 hover:text-slate-200 text-xs px-2 py-0.5 rounded cursor-pointer"
                 >
-                  <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>دانلود نمونه قالب استاندارد</span>
-                </button>
-
-                <button
-                  type="submit"
-                  className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 cursor-pointer"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>بارگذاری و ایمپورت گروهی</span>
+                  بستن
                 </button>
               </div>
-            </form>
-          </div>
+              <p className="pr-7">{importFeedback.message}</p>
 
-          {/* BACKUP & RESTORE JSON */}
-          <div className="lg:col-span-6 bg-slate-800/30 border border-slate-800 rounded-3xl p-5 space-y-4 shadow-lg flex flex-col justify-between">
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-                <Database className="w-5 h-5 text-teal-400" />
-                <div>
-                  <h2 className="text-sm font-bold text-slate-200">پشتیبان‌گیری کامل و بازیابی دیتابیس (JSON)</h2>
-                  <p className="text-[10px] text-slate-400">تهیه نسخه پشتیبان از کل سامانه، نمرات، رمزها و لاگ‌ها</p>
-                </div>
-              </div>
-
-              {backupFeedback && (
-                <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
-                  backupFeedback.success ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
-                }`}>
-                  {backupFeedback.success ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
-                  <span>{backupFeedback.message}</span>
+              {importFeedback.errors && importFeedback.errors.length > 0 && (
+                <div className="mt-2 pr-7 pt-2 border-t border-rose-500/20 space-y-1">
+                  <span className="font-bold block text-rose-400">لیست خطاهای یافت‌شده در ردیف‌ها:</span>
+                  <ul className="list-disc list-inside space-y-0.5 text-[11px] text-rose-300/90 font-mono">
+                    {importFeedback.errors.slice(0, 10).map((err, idx) => (
+                      <li key={idx}>{err}</li>
+                    ))}
+                    {importFeedback.errors.length > 10 && (
+                      <li>و {importFeedback.errors.length - 10} خطای دیگر...</li>
+                    )}
+                  </ul>
                 </div>
               )}
-
-              <p className="text-xs text-slate-400 leading-relaxed">
-                جهت نگهداری امن اطلاعات ارزیابی دوره‌های گذشته یا انتقال سیستم به سرور دیگر، می‌توانید فایل JSON کامل را صادر نموده و در صورت نیاز بازیابی فرمایید.
-              </p>
             </div>
+          )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-              <button
-                type="button"
-                onClick={handleExportJSON}
-                className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-all border border-slate-700 cursor-pointer"
-              >
-                <Download className="w-4 h-4 text-teal-400" />
-                <span>دانلود فایل پشتیبان (JSON)</span>
-              </button>
+          {/* VIEW A: UNIVERSAL IMPORT CONSOLE */}
+          {(dataHubActiveView === 'hub' || dataHubActiveView === 'import') && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              
+              {/* Left/Main Column: Import Form */}
+              <div className="lg:col-span-8 bg-slate-800/30 border border-slate-800 rounded-3xl p-6 space-y-5 shadow-lg">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Upload className="w-5 h-5 text-teal-400" />
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-100">ورود و مهاجرت کلان اطلاعات به سامانه</h3>
+                      <p className="text-[10px] text-slate-400">پشتیبانی از قالب‌های اکسل CSV (با هدرهای فارسی/انگلیسی) و فایل‌های JSON</p>
+                    </div>
+                  </div>
 
-              <label className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-all border border-slate-700 cursor-pointer">
-                <Upload className="w-4 h-4 text-teal-400" />
-                <span>بازیابی از فایل پشتیبان</span>
-                <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
-              </label>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadEntityTemplate(targetImportEntity)}
+                    className="text-xs text-teal-400 hover:text-teal-300 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    <span>دانلود الگوی نمونه CSV</span>
+                  </button>
+                </div>
+
+                {/* Target Entity Selector */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-300">موجودیت مقصد بارگذاری:</label>
+                    <select
+                      value={targetImportEntity}
+                      onChange={(e) => setTargetImportEntity(e.target.value as DataEntityKey)}
+                      className="w-full text-xs p-2.5 rounded-xl border bg-slate-950 border-slate-700 text-teal-300 font-bold focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
+                    >
+                      <option value="full_system">بازیابی کامل کل سیستم (Full System JSON Restore)</option>
+                      <option value="employees">لیست پرسنل و پرونده‌های همکاران (Employees)</option>
+                      <option value="criteria">بانک شاخص‌ها و سنجه‌های شایستگی (Criteria & KPIs)</option>
+                      <option value="profiles">پروفایل‌ها و ماتریس‌های شغلی (Job Profiles)</option>
+                      <option value="evaluations">سوابق و احکام ارزیابی عملکرد (Evaluations)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-300">استراتژی اعمال داده‌ها:</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setImportMode('merge')}
+                        className={`p-2.5 rounded-xl text-xs font-bold transition-all border text-center cursor-pointer ${
+                          importMode === 'merge'
+                            ? 'bg-teal-500/10 border-teal-500 text-teal-300 shadow-sm'
+                            : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        ادغام هوشمند (Merge)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImportMode('replace')}
+                        className={`p-2.5 rounded-xl text-xs font-bold transition-all border text-center cursor-pointer ${
+                          importMode === 'replace'
+                            ? 'bg-rose-500/10 border-rose-500 text-rose-300 shadow-sm'
+                            : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        جایگزینی کامل (Replace)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* File Dropzone or Selection */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-300">
+                    <span className="font-bold flex items-center gap-1.5">
+                      <FileCode className="w-3.5 h-3.5 text-teal-400" />
+                      محتوای داده‌ها (انتخاب فایل یا کپی مستقیم از اکسل):
+                    </span>
+                    <label className="text-teal-400 hover:text-teal-300 text-xs font-bold flex items-center gap-1 cursor-pointer bg-slate-900 border border-slate-700 px-2.5 py-1 rounded-lg">
+                      <Upload className="w-3 h-3" />
+                      <span>انتخاب فایل از کامپیوتر (.csv, .json, .txt)</span>
+                      <input
+                        type="file"
+                        accept=".csv,.json,.txt"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onload = (ev) => {
+                              const content = ev.target?.result as string;
+                              if (content) {
+                                setRawImportText(content);
+                              }
+                            };
+                            reader.readAsText(file, 'UTF-8');
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+
+                  <textarea
+                    rows={7}
+                    value={rawImportText}
+                    onChange={(e) => setRawImportText(e.target.value)}
+                    placeholder={`متن فایل CSV یا کدهای JSON را اینجا جای‌گذاری کنید یا فایل را آپلود نمایید...\nنمونه پرسنل: نام و نام خانوادگی,کد پرسنلی,واحد سازمانی,عنوان رده شغلی,نقش کاربری,نام کاربری\nعلی رضایی,EMP-1001,ماشین‌کاری ۱,اپراتور CNC,کارمند,ali_rezaei`}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-xs text-slate-200 font-mono focus:outline-none focus:border-teal-500 leading-relaxed"
+                  />
+                </div>
+
+                {/* Submit Action */}
+                <div className="flex items-center justify-between pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setRawImportText('')}
+                    className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>پاکسازی کادر متن</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isProcessingImport || !rawImportText.trim()}
+                    onClick={() => handleProcessImport(rawImportText, targetImportEntity, importMode)}
+                    className="bg-teal-500 hover:bg-teal-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-black px-6 py-3 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-teal-500/20 cursor-pointer"
+                  >
+                    {isProcessingImport ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>در حال پردازش و اعتبارسنجی...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
+                        <span>پردازش، اعتبارسنجی و ثبت در دیتابیس</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Right Column: Import Guidance & Column Reference */}
+              <div className="lg:col-span-4 space-y-4">
+                
+                {/* Guidelines Box */}
+                <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-5 space-y-3">
+                  <h4 className="text-xs font-black text-slate-200 flex items-center gap-1.5">
+                    <Info className="w-4 h-4 text-teal-400" />
+                    راهنمای ستون‌ها و ورود بی‌نقص
+                  </h4>
+
+                  <div className="text-xs text-slate-400 space-y-2 leading-relaxed">
+                    <p>
+                      سامانه هوشمند اصفهان چالاک به طور خودکار هم هدرهای فارسی اکسل و هم کلیدهای استاندارد انگلیسی را شناسایی و نگاشت می‌کند.
+                    </p>
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5 text-[11px]">
+                      <div className="font-bold text-teal-300">نکات حیاتی:</div>
+                      <ul className="list-disc list-inside space-y-1 text-slate-400">
+                        <li>کد پرسنلی و کد شاخص‌ها کلید یکتا (Unique Key) هستند.</li>
+                        <li>در حالت ادغام هوشمند (Merge)، رکوردهای هم‌کد به‌روزرسانی شده و سایرین افزوده می‌شوند.</li>
+                        <li>فرمت CSV با جداکننده کاما (,) یا تب (\t) پشتیبانی می‌شود.</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Direct JSON Restore Quickbox */}
+                <div className="bg-gradient-to-br from-indigo-950/40 to-slate-900 border border-indigo-500/30 rounded-3xl p-5 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <FolderLock className="w-4 h-4 text-indigo-400" />
+                    <h4 className="text-xs font-black text-slate-200">بازیابی مستقیم از فایل پشتیبان</h4>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    اگر قبلاً فایل کامل پشتیبان سامانه (<span className="font-mono text-indigo-300">chalak_full_backup.json</span>) را دانلود نموده‌اید، می‌توانید مستقیماً فایل را انتخاب نمایید:
+                  </p>
+
+                  <label className="w-full bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>انتخاب و بارگذاری سریع فایل JSON پشتیبان</span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (ev) => {
+                            const content = ev.target?.result as string;
+                            if (content) {
+                              handleProcessImport(content, 'full_system', 'merge');
+                            }
+                          };
+                          reader.readAsText(file, 'UTF-8');
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+
+              </div>
+
             </div>
-          </div>
+          )}
+
+          {/* VIEW B: EXPORT & TEMPLATES CONSOLE */}
+          {dataHubActiveView === 'export' && (
+            <div className="bg-slate-800/30 border border-slate-800 rounded-3xl p-6 space-y-6 shadow-lg">
+              <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+                <Download className="w-5 h-5 text-teal-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100">صادرات و دانلود فایل‌های خروجی و الگوهای رسمی</h3>
+                  <p className="text-[10px] text-slate-400">تمام خروجی‌های CSV شامل کدگذاری UTF-8 BOM بوده و به صورت ۱۰۰٪ استاندارد و بدون به‌هم‌ریختگی در مایکروسافت اکسل باز می‌شوند.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Export Card 1: Employees */}
+                <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-3 flex flex-col justify-between">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-4 h-4 text-indigo-400" />
+                      <h4 className="text-xs font-bold text-slate-100">لیست پرسنل و پرونده‌ها</h4>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      شامل نام، کد، واحد، رده شغلی، نقش، نام کاربری و کدهای سرپرست/همتا ({employees.length} نفر)
+                    </p>
+                  </div>
+                  <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <button
+                      onClick={() => handleExportEntityCSV('employees')}
+                      className="w-full bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>دانلود اکسل کامل پرسنل (CSV)</span>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadEntityTemplate('employees')}
+                      className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-slate-400" />
+                      <span>دانلود فایل الگوی خام</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Export Card 2: Criteria */}
+                <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-3 flex flex-col justify-between">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <Sliders className="w-4 h-4 text-teal-400" />
+                      <h4 className="text-xs font-bold text-slate-100">بانک شاخص‌ها و سنجه‌ها</h4>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      کدهای K/B/Q/S/L، تعاریف عملیاتی، منابع استخراج داده، روش‌های سنجش و جهت مطلوبیت ({criteria.length} شاخص)
+                    </p>
+                  </div>
+                  <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <button
+                      onClick={() => handleExportEntityCSV('criteria')}
+                      className="w-full bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>دانلود بانک شاخص‌ها (CSV)</span>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadEntityTemplate('criteria')}
+                      className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-slate-400" />
+                      <span>دانلود فایل الگوی خام</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Export Card 3: Profiles */}
+                <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-3 flex flex-col justify-between">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <Boxes className="w-4 h-4 text-amber-400" />
+                      <h4 className="text-xs font-bold text-slate-100">پروفایل‌ها و اوزان شغلی</h4>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      الگوهای شایستگی، ترکیب اوزان شاخص‌ها، خانواده شغلی و وضعیت تصویب ({profiles.length} رده)
+                    </p>
+                  </div>
+                  <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <button
+                      onClick={() => handleExportEntityCSV('profiles')}
+                      className="w-full bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>دانلود پروفایل‌های شغلی (CSV)</span>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadEntityTemplate('profiles')}
+                      className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-slate-400" />
+                      <span>دانلود فایل الگوی خام</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Export Card 4: Evaluations */}
+                <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-3 flex flex-col justify-between">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <Award className="w-4 h-4 text-rose-400" />
+                      <h4 className="text-xs font-bold text-slate-100">سوابق ارزیابی عملکرد</h4>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      کارنامه‌های نهایی دوره‌ها، میانگین موزون امتیازات، یادداشت‌های مربیگری ({evaluations.length} پرونده)
+                    </p>
+                  </div>
+                  <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <button
+                      onClick={() => handleExportEntityCSV('evaluations')}
+                      className="w-full bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>دانلود کارنامه‌ها و نمرات (CSV)</span>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadEntityTemplate('evaluations')}
+                      className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-slate-400" />
+                      <span>دانلود فایل الگوی خام</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* VIEW C: INDUSTRIAL SANDBOX & SCALE BENCHMARK */}
+          {dataHubActiveView === 'tools' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              
+              {/* Box 1: Factory Standard Dataset */}
+              <div className="bg-slate-800/30 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-lg flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-100">بارگذاری بسته داده‌های استاندارد کارخانه</h4>
+                      <p className="text-[10px] text-slate-400">مجموعه داده‌های صنعتی کامل، شاخص‌های کیفی و پروفایل‌های ایستگاهی</p>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    با کلیک روی این دکمه، داده‌های واقعی خطوط ماشین‌کاری و مونتاژ اصفهان چالاک (شامل شاخص‌های PPM، OEE، ۵اس، پروتکل‌های HSE، نقش‌های سرپرستی و کارشناسی QC) بارگذاری می‌شوند.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleLoadIndustrialDemoDataset}
+                  className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition-all shadow-md shadow-teal-500/20 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-slate-950 stroke-[2.5]" />
+                  <span>تزریق داده‌های نمونه استاندارد صنعتی</span>
+                </button>
+              </div>
+
+              {/* Box 2: Scale Benchmark Generator */}
+              <div className="bg-slate-800/30 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-lg flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                      <Zap className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-100">تولید داده‌های کلان بنچمارک و استرس‌تست</h4>
+                      <p className="text-[10px] text-slate-400">سنجش سرعت، رندرینگ بهینه و پایداری جداول با ۵۰۰+ رکورد</p>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    جهت اطمینان از عملکرد پرسرعت موتور سامانه و اعتبارسنجی قابلیت‌های ایمپورت/اکسپورت با حجم‌های بزرگ، می‌توانید رکوردهای پرسنلی مصنوعی تولید نمایید:
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateScaleBenchmark(100)}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 py-2.5 rounded-xl text-xs font-bold transition-all border border-slate-700 cursor-pointer"
+                  >
+                    + ۱۰۰ رکورد
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateScaleBenchmark(500)}
+                    className="bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-indigo-300 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    + ۵۰۰ رکورد
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateScaleBenchmark(1000)}
+                    className="bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/40 text-teal-300 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    + ۱,۰۰۰ رکورد
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          )}
 
         </div>
       )}

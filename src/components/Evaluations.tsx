@@ -492,7 +492,7 @@ export default function Evaluations({
                 return (
                   <div
                     key={ev.id}
-                    className="flex items-center px-4 py-2.5 hover:bg-slate-800/20 transition-colors border-b border-slate-800/40 text-xs w-full"
+                    className="flex items-center text-xs w-full py-1 text-slate-200"
                   >
                     <div className="w-1/4 font-semibold text-slate-200 truncate">
                       {emp?.name || 'نامشخص'}
@@ -758,8 +758,8 @@ export default function Evaluations({
                 <div className="pt-2">
                   <AIFeedbackAssistant
                     supervisorComment={activeEval.note || ''}
-                    employeeName={activeEmp?.name || 'همکار گرامی'}
-                    jobTitle={activeProf?.title || 'عنوان شغلی'}
+                    employeeName={activeEmployee?.name || 'همکار گرامی'}
+                    jobTitle={activeProfile?.title || 'عنوان شغلی'}
                     competencyScores={{
                       K: activeEval.scores.find(s => criteria.find(c => c.id === s.cid)?.cat === 'K')?.value || 3.5,
                       Q: activeEval.scores.find(s => criteria.find(c => c.id === s.cid)?.cat === 'Q')?.value || 4.0,

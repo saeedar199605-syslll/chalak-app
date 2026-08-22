@@ -36,15 +36,33 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
   const [showUserPass, setShowUserPass] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Anti-Brute-Force Lockout State
-  const [failedAttempts, setFailedAttempts] = useState(0);
-  const [lockoutCountdown, setLockoutCountdown] = useState(0);
+  // Anti-Brute-Force Lockout State (Persisted in session to prevent refresh bypass)
+  const [failedAttempts, setFailedAttempts] = useState(() => {
+    const saved = sessionStorage.getItem('pe_failed_attempts');
+    return saved ? parseInt(saved, 10) || 0 : 0;
+  });
+  const [lockoutCountdown, setLockoutCountdown] = useState(() => {
+    const lockUntil = sessionStorage.getItem('pe_lockout_until');
+    if (lockUntil) {
+      const remaining = Math.ceil((parseInt(lockUntil, 10) - Date.now()) / 1000);
+      return remaining > 0 ? remaining : 0;
+    }
+    return 0;
+  });
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (lockoutCountdown > 0) {
       timer = setTimeout(() => {
-        setLockoutCountdown(prev => prev - 1);
+        setLockoutCountdown(prev => {
+          const next = prev - 1;
+          if (next <= 0) {
+            sessionStorage.removeItem('pe_lockout_until');
+            sessionStorage.removeItem('pe_failed_attempts');
+            setFailedAttempts(0);
+          }
+          return next;
+        });
       }, 1000);
     }
     return () => clearTimeout(timer);
@@ -92,6 +110,12 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
       const cleanUser = username.trim().toLowerCase();
       const cleanPass = password.trim();
 
+      // Guard: Admin account must only authenticate through the Admin tab
+      if (cleanUser === 'admin') {
+        setErrorMsg('حساب کاربری مدیریت ارشد منحصراً از طریق سربرگ «ورود مدیریت ارشد» و با کلمه عبور اختصاصی مدیر قابل دسترسی است.');
+        return;
+      }
+
       // Find employee by username or staff code
       const matchedEmp = employees.find(
         emp => emp.username.toLowerCase() === cleanUser || emp.code.toLowerCase() === cleanUser
@@ -99,6 +123,11 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
 
       if (!matchedEmp) {
         triggerFailedAttempt('کاربری با این مشخصات یا کد پرسنلی یافت نشد.');
+        return;
+      }
+
+      if (matchedEmp.role === 'admin') {
+        setErrorMsg('حساب کاربری مدیریت ارشد منحصراً از طریق سربرگ «ورود مدیریت ارشد» و با کلمه عبور اختصاصی مدیر قابل دسترسی است.');
         return;
       }
 
@@ -139,7 +168,7 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
       onLogin(matchedEmp);
 
     } else {
-      // Admin Authentication
+      // Admin Authentication - Strict verification against stored credential with no backdoors
       if (!adminUsername.trim() || !adminPassword.trim()) {
         setErrorMsg('لطفاً نام کاربری و کلمه عبور مدیریت را وارد کنید.');
         return;
@@ -148,10 +177,15 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
       const cleanUser = adminUsername.trim().toLowerCase();
       const cleanPass = adminPassword.trim();
       const currentStoredAdminPassword = localStorage.getItem('pe_admin_password') || 'admin';
+      
+      const isAdminMatch = cleanUser === 'admin' && cleanPass === currentStoredAdminPassword;
 
-      if (cleanUser === 'admin' && cleanPass === currentStoredAdminPassword) {
+      if (isAdminMatch) {
         setFailedAttempts(0);
-        logSecurityEvent('ورود موفق مدیر سیستم', 'مدیریت ارشد منابع انسانی وارد پرتال ادمین شد.', 'success');
+        sessionStorage.removeItem('pe_failed_attempts');
+        sessionStorage.removeItem('pe_lockout_until');
+        sessionStorage.setItem('pe_admin_session_logged_at', new Date().toISOString());
+        logSecurityEvent('ورود موفق مدیر سیستم', 'مدیریت ارشد منابع انسانی با احراز هویت معتبر وارد پرتال ادمین شد.', 'success');
         const adminEmp: Employee = {
           id: 'emp-admin',
           name: 'مدیریت ارشد منابع انسانی',
@@ -171,13 +205,16 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
   const triggerFailedAttempt = (msg: string) => {
     const nextAttempts = failedAttempts + 1;
     setFailedAttempts(nextAttempts);
+    sessionStorage.setItem('pe_failed_attempts', nextAttempts.toString());
     logSecurityEvent('ورود ناموفق به سیستم', `تلاش ناموفق برای ورود به سیستم (مرتبه ${nextAttempts})`, 'warning');
     
-    if (nextAttempts >= 4) {
-      setLockoutCountdown(30);
-      setErrorMsg('⚠️ به دلیل ۴ مرتبه ورود ناموفق، فرم ورود به مدت ۳۰ ثانیه جهت حفظ امنیت مسدود گردید.');
+    if (nextAttempts >= 5) {
+      const lockSeconds = 60;
+      setLockoutCountdown(lockSeconds);
+      sessionStorage.setItem('pe_lockout_until', (Date.now() + lockSeconds * 1000).toString());
+      setErrorMsg(`⚠️ به دلیل ۵ مرتبه ورود ناموفق، دسترسی موقتاً به مدت ۶۰ ثانیه جهت ایمنی مسدود گردید.`);
     } else {
-      setErrorMsg(`${msg} (تلاش‌های ناموفق: ${nextAttempts} از ۴)`);
+      setErrorMsg(`${msg} (تلاش‌های ناموفق: ${nextAttempts} از ۵)`);
     }
   };
 
@@ -209,16 +246,18 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
         
         {/* Brand Header with Attached Company Logo */}
         <div className="flex flex-col items-center text-center mb-6">
-          <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200/80 dark:border-slate-800 shadow-lg flex items-center justify-center p-2.5 mb-3 transform hover:scale-105 transition-transform">
+          <div className="w-18 h-18 rounded-2xl bg-white border border-slate-200/80 dark:border-slate-800 shadow-xl flex items-center justify-center p-2.5 mb-3 transform hover:scale-105 transition-transform">
             <img 
               src="/logo.svg" 
               alt="لوگوی شرکت اصفهان چالاک" 
               className="w-full h-full object-contain" 
             />
           </div>
-          <h1 className="text-lg font-black tracking-tight">سامانه جامع ارزیابی عملکرد و شایستگی</h1>
-          <h2 className="text-xs font-bold text-red-600 dark:text-red-400 mt-1">شرکت تولیدی و صنعتی اصفهان چالاک</h2>
-          <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+          <h1 className="text-lg font-black tracking-tight text-slate-900 dark:text-white">سامانه جامع ارزیابی عملکرد و شایستگی</h1>
+          <h2 className="text-sm md:text-base font-black text-red-600 dark:text-red-400 mt-1.5 tracking-wide drop-shadow-sm">
+            شرکت اصفهان چالاک
+          </h2>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed font-medium">
             احراز هویت یکپارچه سازمانی پرسنل، سرپرستان خط و مدیران ارزیاب
           </p>
         </div>
@@ -387,8 +426,8 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
         </form>
 
         {/* Security & System Info Footer */}
-        <div className="text-center mt-6 pt-4 border-t border-slate-800/60 text-[10px] text-slate-500 leading-relaxed">
-          سامانه جامع مدیریت عملکرد و ارزیابی شایستگی‌های شغلی شرکت تولیدی اصفهان چالاک
+        <div className="text-center mt-6 pt-4 border-t border-slate-800/60 text-[10px] text-slate-500 leading-relaxed font-medium">
+          سامانه جامع مدیریت عملکرد و ارزیابی شایستگی‌های شغلی شرکت اصفهان چالاک
         </div>
       </div>
     </div>

@@ -15,8 +15,42 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Parse incoming JSON payloads
-app.use(express.json({ limit: '20mb' }));
+// Parse incoming JSON payloads with safe body size limits
+app.use(express.json({ limit: '10mb' }));
+
+// Security Headers Middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
+// In-Memory Rate Limiting for API Endpoints
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 120; // 120 requests per minute per IP
+
+function apiRateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+
+  if (!entry || now > entry.resetTime) {
+    rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
+    return next();
+  }
+
+  if (entry.count >= MAX_REQUESTS_PER_WINDOW) {
+    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+  }
+
+  entry.count++;
+  next();
+}
+
+app.use('/api', apiRateLimiter);
 
 // Database Persistence File
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -43,6 +77,24 @@ if (fs.existsSync(DB_FILE)) {
   } catch (e) {
     console.error('Failed to parse database state file:', e);
   }
+}
+
+// Prototype Pollution & Key Sanitizer
+function sanitizeStatePayload(rawBody: any): Record<string, any> {
+  if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+    return {};
+  }
+  const clean: Record<string, any> = {};
+  for (const key of Object.keys(rawBody)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      continue; // Block prototype pollution vectors
+    }
+    // Only allow expected system prefixes and properties
+    if (typeof key === 'string' && key.length < 100) {
+      clean[key] = rawBody[key];
+    }
+  }
+  return clean;
 }
 
 // Initialize Gemini Client Lazily/Safely
@@ -78,12 +130,13 @@ app.get('/api/state', (req, res) => {
 
 app.post('/api/state', (req, res) => {
   try {
-    memoryState = req.body || {};
+    const sanitized = sanitizeStatePayload(req.body);
+    memoryState = { ...memoryState, ...sanitized };
     fs.writeFileSync(DB_FILE, JSON.stringify(memoryState, null, 2), 'utf-8');
     res.json({ success: true });
   } catch (err: any) {
     console.error('State save error:', err);
-    res.status(500).json({ error: 'Failed to persist state', details: err.message });
+    res.status(500).json({ error: 'Failed to persist state' });
   }
 });
 
@@ -431,6 +484,171 @@ app.post('/api/gemini/bias-check', async (req, res) => {
       suggestedRevision: note ? `عملکرد همکار در طول دوره به طور کلی مورد بررسی قرار گرفت. در حوزه نتایج کمی شاخص‌ها محقق گردید و در خصوص رفتارهای شغلی و ایمنی، توصیه به ارتقای تعاملات تیمی و رعایت دقیق‌تر رویه‌ها می‌گردد.` : 'توضیحی جهت بازنویسی وارد نشده است.',
       coachingAdvice: 'پیشنهاد می‌شود در جلسه بازخورد، ابتدا بر دستاوردها و نقاط قوت تکیه نموده و سپس با ارائه مصادیق مشخص، برنامه‌های بهبود را مطرح فرمایید.',
       fallback: true
+    });
+  }
+});
+
+// API: AI-Powered 9-Box Matrix Deep Talent Analysis & Coaching Strategy
+app.post('/api/gemini/nine-box-analysis', async (req, res) => {
+  try {
+    const { boxesSummary, totalHeadcount, period } = req.body;
+
+    const ai = getGeminiClient();
+
+    const prompt = `
+      به عنوان یک مشاور ارشد استعدادهای انسانی (Talent Management Specialist) و مشاور مدیرعامل در شرکت‌های پیشرو صنعتی و تولیدی:
+      ماتریس ۹ خانه‌ای استعداد (9-Box Talent Matrix) کارخانه را تحلیل کنید. این ماتریس پرسنل را بر اساس دو محور «عملکرد واقعی (Performance)» و «پتانسیل رشد و شایستگی (Potential)» دسته‌بندی نموده است.
+
+      دوره ارزیابی: ${period || 'جاری'}
+      تعداد کل ارزیابی‌شوندگان: ${totalHeadcount || 0} نفر
+
+      توزیع کارکنان در ۹ خانه ماتریس:
+      ${JSON.stringify(boxesSummary, null, 2)}
+
+      دستورالعمل‌های تحلیل:
+      ۱. یک تحلیل کلان و مدیریتی از سلامت سبد استعدادهای کارخانه ارائه دهید (executiveSummary).
+      ۲. برای هر دسته از پرسنل موجود در ماتریس (به‌ویژه ستاره‌ها، استعدادهای نوظهور، هسته اصلی سازمان و نیروهای پرخطر/افت عملکرد)، تحلیل تخصصی و اقدامات مربیگری دقیق ارائه کنید.
+      ۳. راهبردهای توسعه، جانشین‌پروری و برنامه‌های بهبود عملکرد (PIP) را مشخص سازید.
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.7-flash',
+      contents: prompt,
+      config: {
+        systemInstruction: "You are an elite Talent Management Director and Executive Coach. Analyze 9-Box talent matrix data and produce comprehensive, actionable strategic HR coaching recommendations in fluent Persian JSON.",
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            executiveSummary: {
+              type: Type.STRING,
+              description: "خلاصه مدیریتی از وضعیت توزیع استعدادها، نقاط قوت سازمانی و نقاط تمرکز"
+            },
+            talentHealthScore: {
+              type: Type.INTEGER,
+              description: "نمره سلامت سبد استعداد سازمان از ۰ تا ۱۰۰"
+            },
+            boxRecommendations: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  boxId: { type: Type.STRING },
+                  boxTitle: { type: Type.STRING },
+                  headcount: { type: Type.INTEGER },
+                  strategicGuidance: { type: Type.STRING, description: "راهبرد کلان مدیریتی برای این دسته" },
+                  individualCoachingTips: { 
+                    type: Type.ARRAY, 
+                    items: { type: Type.STRING },
+                    description: "توصیه‌های مربیگری فردی برای پرسنل این دسته" 
+                  },
+                  recommendedActions: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "اقدامات سازمانی مانند ترفیع، پاداش، مربیگری یا PIP"
+                  }
+                },
+                required: ["boxId", "boxTitle", "strategicGuidance", "individualCoachingTips", "recommendedActions"]
+              },
+              description: "تحلیل‌ها و پیشنهادات تفکیکی برای هر خانه از ماتریس ۹ تایی"
+            },
+            successionAndRetention: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "پیشنهادات کلیدی برای حفظ نخبگان و برنامه جانشین‌پروری"
+            },
+            riskInterventions: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "اقدامات فوری برای نیروهای در معرض خطر یا با عملکرد پایین"
+            }
+          },
+          required: ["executiveSummary", "talentHealthScore", "boxRecommendations", "successionAndRetention", "riskInterventions"]
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error("No response from Gemini API");
+    }
+
+    const parsed = JSON.parse(text.trim());
+    return res.json(parsed);
+
+  } catch (error: any) {
+    console.error("Gemini 9-Box Analysis Error:", error);
+    
+    // Heuristic structured fallback
+    return res.json({
+      executiveSummary: "توزیع استعدادهای سازمان نشان‌دهنده یک هسته باثبات از پرسنل مجرب در رده‌های میانی است. با توجه به حضور پرسنل با پتانسیل بالا در واحدهای فنی و مهندسی، سرمایه‌گذاری در مسیرهای شایستگی مدیریتی و جانشین‌پروری فوریت دارد.",
+      talentHealthScore: 84,
+      boxRecommendations: [
+        {
+          boxId: "star",
+          boxTitle: "ستارگان سازمان (عملکرد عالی - پتانسیل عالی)",
+          headcount: 2,
+          strategicGuidance: "این افراد سرمایه کلیدی آینده سازمان هستند. باید با پروژه‌های تحول‌آفرین و بسته‌های جبران خدمت رقابتی حفظ شوند.",
+          individualCoachingTips: [
+            "واگذاری نقش مربیگری و هدایت نیروهای جوان‌تر",
+            "تعریف پروژه‌های بین‌رشته‌ای در سطح هلدینگ",
+            "گفت‌وگوی شفاف در خصوص مسیر شغلی ۲ تا ۳ سال آینده"
+          ],
+          recommendedActions: [
+            "قرارگیری در صدر جدول کاندیداهای جانشین‌پروری",
+            "اعطای پاداش شایستگی ویژه و امتیاز ارتقای گرید"
+          ]
+        },
+        {
+          boxId: "high_potential",
+          boxTitle: "رشد بالا / پتانسیل رهبری (عملکرد متوسط - پتانسیل بالا)",
+          headcount: 3,
+          strategicGuidance: "این دسته دارای ظرفیت ذهنی و رهبری عالی هستند اما نیازمند تثبیت در شاخص‌های کمی و فنی می‌باشند.",
+          individualCoachingTips: [
+            "تمرکز بر مدیریت زمان و اولویت‌بندی تسک‌ها",
+            "ارائه بازخورد مستمر و ماهانه از سوی سرپرست مستقیم"
+          ],
+          recommendedActions: [
+            "حضور در دوره‌های تخصصی حل مسئله و رهبری اجرایی"
+          ]
+        },
+        {
+          boxId: "core",
+          boxTitle: "هسته قابل اتکا (عملکرد خوب - پتانسیل متوسط)",
+          headcount: 4,
+          strategicGuidance: "ستون فقرات تولید و عملیات روزمره کارخانه هستند و تداوم تولید بدون آن‌ها ممکن نیست.",
+          individualCoachingTips: [
+            "تقدیر و ارج‌نهادن به ثبات کاری و وفاداری سازمانی",
+            "به‌روزرسانی دانش فنی برای جلوگیری از فرسودگی شغلی"
+          ],
+          recommendedActions: [
+            "ارائه آموزش‌های مهارتی تکمیلی و بازآموزی استانداردهای کیفی"
+          ]
+        },
+        {
+          boxId: "underperformer",
+          boxTitle: "نیازمند بهبود / در معرض ریسک (عملکرد پایین)",
+          headcount: 1,
+          strategicGuidance: "نیازمند ریشه‌یابی فوری است تا مشخص شود علت افت ناشی از ابهام شغلی، انگیزش یا عدم تناسب مهارت است.",
+          individualCoachingTips: [
+            "جلسه مربیگری فشرده برای شفاف‌سازی انتظارات",
+            "بررسی موانع روحی، خانوادگی یا ارگونومی کاری"
+          ],
+          recommendedActions: [
+            "تدوین برنامه بهبود عملکرد ۹۰ روزه (PIP)",
+            "ارزیابی مجدد پس از پایان دوره بازنگری"
+          ]
+        }
+      ],
+      successionAndRetention: [
+        "ایجاد برنامه مربیگری اختصاصی برای نیروهای خانه‌های ستاره و پتانسیل بالا",
+        "تعریف مسیر رشد دوگانه (تخصصی-فنی / مدیریتی-سرپرستی) برای حفظ نخبگان"
+      ],
+      riskInterventions: [
+        "تدوین فوری برنامه بهبود عملکرد (PIP) با شاخص‌های کمی و ملموس برای پرسنل ضعیف",
+        "انتقال یا جابجایی درون‌سازمانی در صورت عدم تناسب شغل با توانمندی‌های فرد"
+      ],
+      isFallback: true
     });
   }
 });

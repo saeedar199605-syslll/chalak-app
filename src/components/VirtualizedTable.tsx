@@ -111,10 +111,10 @@ export function VirtualizedTable<T>({
                       height: `${vItem.height}px`,
                       transform: `translateY(${vItem.offsetTop}px)`
                     }}
-                    className={`transition-colors flex items-center px-4 ${
+                    className={`transition-colors flex items-center px-4 virtualized-row relative z-0 ${
                       theme === 'dark'
-                        ? 'hover:bg-slate-800/60 border-b border-slate-800/40'
-                        : 'hover:bg-slate-50 border-b border-slate-100'
+                        ? 'hover:bg-slate-800/80 border-b border-slate-800/40 text-slate-200'
+                        : 'hover:bg-slate-100 border-b border-slate-200 text-slate-900'
                     }`}
                   >
                     {renderRow(item, vItem.index)}

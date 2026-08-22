@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { validateCriterionInput } from '../utils/validation';
 import { 
   FileSpreadsheet, 
   Plus, 
@@ -18,15 +19,18 @@ import {
   AlertCircle,
   UploadCloud,
   Layers,
-  Sparkles
+  Sparkles,
+  Download
 } from 'lucide-react';
 import { Criterion, CategoryKey, CATEGORIES } from '../types';
+import UniversalDataExchange, { DataExchangeConfig } from './UniversalDataExchange';
 
 interface CriteriaBankProps {
   criteria: Criterion[];
   onAddCriterion: (crit: Omit<Criterion, 'id'>) => boolean;
   onUpdateCriterion: (id: string, crit: Omit<Criterion, 'id'>) => boolean;
   onDeleteCriterion: (id: string) => void;
+  theme?: 'dark' | 'light';
 }
 
 // Predefined industrial competency presets for fast 1-click library loading
@@ -77,7 +81,8 @@ export default function CriteriaBank({
   criteria, 
   onAddCriterion, 
   onUpdateCriterion, 
-  onDeleteCriterion 
+  onDeleteCriterion,
+  theme = 'dark'
 }: CriteriaBankProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCat, setSelectedCat] = useState<CategoryKey | 'ALL'>('ALL');
@@ -88,8 +93,78 @@ export default function CriteriaBank({
 
   // Bulk Import Modal State
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkStatusMsg, setBulkStatusMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const criteriaExchangeConfig: DataExchangeConfig<Criterion> = {
+    entityName: 'بانک مرکزی شاخص‌ها و سنجه‌ها',
+    entityKey: 'criteria',
+    items: criteria,
+    csvHeaders: [
+      { key: 'code', label: 'کد شاخص' },
+      { key: 'name', label: 'عنوان شاخص' },
+      { key: 'cat', label: 'دسته‌بندی (K/B)', accessor: (c) => c.cat },
+      { key: 'def', label: 'تعریف عملیاتی و سنجه' },
+      { key: 'source', label: 'منبع داده و استخراج', accessor: (c) => c.source || '' },
+      { key: 'method', label: 'روش و فرمول سنجش', accessor: (c) => c.method || '' },
+      { key: 'dir', label: 'جهت مطلوبیت (more/less)', accessor: (c) => c.dir || 'more' }
+    ],
+    templateSampleRows: [
+      { 'کد شاخص': 'K-PRD-10', 'عنوان شاخص': 'درصد تحقق برنامه خط مونتاژ', 'دسته‌بندی (K/B)': 'K', 'تعریف عملیاتی و سنجه': 'تولید واقعی تقسیم بر برنامه مصوب', 'منبع داده و استخراج': 'سیستم MES', 'روش و فرمول سنجش': 'درصد کمی', 'جهت مطلوبیت (more/less)': 'more' },
+      { 'کد شاخص': 'B-HSE-02', 'عنوان شاخص': 'رعایت نظم و ایمنی صنعتی', 'دسته‌بندی (K/B)': 'B', 'تعریف عملیاتی و سنجه': 'رعایت کلیه موارد ایمنی و ۵اس', 'منبع داده و استخراج': 'ممیزی HSE', 'روش و فرمول سنجش': 'مقیاس ۱ تا ۵', 'جهت مطلوبیت (more/less)': 'more' }
+    ],
+    onImport: (importedItems, mode) => {
+      let count = 0;
+      const errors: string[] = [];
+
+      importedItems.forEach((item: any, index: number) => {
+        const rowNum = index + 1;
+        const rawCode = (item.code || item['کد شاخص'] || `C-${Math.floor(Math.random() * 1000)}`).trim();
+        const rawName = (item.name || item['عنوان شاخص'] || 'شاخص جدید').trim();
+        const rawCat = ((item.cat || item['دسته‌بندی (K/B)'] || item['دسته‌بندی'] || 'K').toString().toUpperCase().startsWith('B') ? 'B' : 'K') as CategoryKey;
+        const rawDef = (item.def || item['تعریف عملیاتی و سنجه'] || item['تعریف عملیاتی'] || `تعریف عملیاتی شاخص ${rawName}`).trim();
+        const rawSource = (item.source || item['منبع داده و استخراج'] || item['منبع داده'] || 'سیستم کارخانه').trim();
+        const rawMethod = (item.method || item['روش و فرمول سنجش'] || item['روش سنجش'] || 'سنجش دوره‌ای').trim();
+        const rawDir = ((item.dir || item['جهت مطلوبیت (more/less)'] || item['جهت مطلوبیت'] || 'more') === 'less' ? 'less' : 'more') as 'more' | 'less';
+
+        const candidate = {
+          code: rawCode,
+          name: rawName,
+          cat: rawCat,
+          def: rawDef,
+          source: rawSource,
+          method: rawMethod,
+          dir: rawDir
+        };
+
+        const validation = validateCriterionInput(candidate);
+        if (!validation.success) {
+          errors.push(`سطر ${rowNum} (${rawCode}): ${validation.errors.join('، ')}`);
+          return;
+        }
+
+        const validCrit = validation.data;
+        const existing = criteria.find(c => c.code.toLowerCase() === validCrit.code.toLowerCase());
+
+        if (existing) {
+          if (mode === 'replace' || mode === 'merge') {
+            const ok = onUpdateCriterion(existing.id, validCrit);
+            if (ok) count++;
+          }
+        } else {
+          const ok = onAddCriterion(validCrit);
+          if (ok) count++;
+        }
+      });
+
+      return {
+        count,
+        message: `تعداد ${count} شاخص شایستگی با موفقیت در بانک شاخص‌ها ثبت و به‌روزرسانی شد.`,
+        errors
+      };
+    }
+  };
   
   // Form values
   const [formCode, setFormCode] = useState('');
@@ -127,26 +202,25 @@ export default function CriteriaBank({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formCode || !formName || !formDef) {
-      setErrorMsg('کد، نام معیار و تعریف عملیاتی الزامی هستند.');
-      return;
-    }
+    setErrorMsg('');
 
-    const prefix = formCode.split('-')[0];
-    if (prefix !== formCat) {
-      setErrorMsg(`کد وارد شده (${formCode}) با پیشوند دسته انتخابی (${formCat}) همخوانی ندارد.`);
-      return;
-    }
-
-    const payload = {
-      code: formCode.trim(),
+    const rawData = {
+      code: formCode,
       cat: formCat,
-      name: formName.trim(),
-      def: formDef.trim(),
-      source: formSource.trim() || undefined,
-      method: formMethod.trim() || undefined,
+      name: formName,
+      def: formDef,
+      source: formSource || undefined,
+      method: formMethod || undefined,
       dir: formCat === 'K' ? formDir : undefined,
     };
+
+    const validation = validateCriterionInput(rawData);
+    if (!validation.success) {
+      setErrorMsg(validation.errors.join(' | '));
+      return;
+    }
+
+    const payload = validation.data;
 
     let success = false;
     if (editingId) {
@@ -247,6 +321,14 @@ export default function CriteriaBank({
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
           <button
+            onClick={() => setIsExchangeModalOpen(true)}
+            className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-bold px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>ورود و خروجی کامل (اکسل/JSON)</span>
+          </button>
+
+          <button
             onClick={() => {
               setBulkStatusMsg(null);
               setIsBulkModalOpen(true);
@@ -254,7 +336,7 @@ export default function CriteriaBank({
             className="bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 font-bold px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm"
           >
             <UploadCloud className="w-4 h-4" />
-            <span>ورود سریع و دسته‌جمعی شاخص‌ها</span>
+            <span>بسته‌های استاندارد آماده</span>
           </button>
           
           <button
@@ -676,6 +758,13 @@ export default function CriteriaBank({
           </div>
         </div>
       )}
+      {/* Universal Data Exchange Modal (Import / Export) */}
+      <UniversalDataExchange
+        config={criteriaExchangeConfig}
+        isOpen={isExchangeModalOpen}
+        onClose={() => setIsExchangeModalOpen(false)}
+        theme={theme}
+      />
     </div>
   );
 }

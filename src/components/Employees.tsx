@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { validateEmployeeInput } from '../utils/validation';
 import { 
   Users, 
   Plus, 
@@ -19,10 +20,13 @@ import {
   Table as TableIcon,
   LayoutGrid,
   Zap,
-  Layers
+  Layers,
+  FileSpreadsheet,
+  Download
 } from 'lucide-react';
 import { Employee, JobProfile, UserRole } from '../types';
 import { VirtualizedTable } from './VirtualizedTable';
+import UniversalDataExchange, { DataExchangeConfig } from './UniversalDataExchange';
 
 interface EmployeesProps {
   employees: Employee[];
@@ -31,6 +35,7 @@ interface EmployeesProps {
   onUpdateEmployee: (id: string, emp: Omit<Employee, 'id'>) => void;
   onDeleteEmployee: (id: string) => void;
   onStartEvaluation: (empId: string) => void;
+  theme?: 'dark' | 'light';
 }
 
 // Predefined workshop rosters for fast 1-click batch team importing
@@ -71,14 +76,16 @@ export default function Employees({
   onAddEmployee,
   onUpdateEmployee,
   onDeleteEmployee,
-  onStartEvaluation
+  onStartEvaluation,
+  theme = 'dark'
 }: EmployeesProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
 
-  // Bulk Import State
+  // Bulk Import State (Legacy quick modal)
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkStatusMsg, setBulkStatusMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -95,6 +102,156 @@ export default function Employees({
   const [formCalibrationLeadId, setFormCalibrationLeadId] = useState('');
   const [formApproverId, setFormApproverId] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Universal Data Exchange Configuration for Employees
+  const employeesExchangeConfig: DataExchangeConfig<Employee> = {
+    entityName: 'مدیریت پرسنل و پرونده‌های همکاران',
+    entityKey: 'employees',
+    items: employees,
+    csvHeaders: [
+      { key: 'name', label: 'نام و نام خانوادگی' },
+      { key: 'code', label: 'کد پرسنلی' },
+      { key: 'unit', label: 'واحد سازمانی' },
+      { 
+        key: 'profile', 
+        label: 'عنوان رده شغلی', 
+        accessor: (emp) => profiles.find(p => p.id === emp.profileId)?.title || profiles.find(p => p.id === emp.profileId)?.code || emp.profileId 
+      },
+      { 
+        key: 'role', 
+        label: 'نقش کاربری', 
+        accessor: (emp) => emp.role === 'admin' ? 'مدیر ارشد' : emp.role === 'supervisor' ? 'سرپرست' : 'کارمند' 
+      },
+      { key: 'username', label: 'نام کاربری' },
+      { 
+        key: 'supervisor', 
+        label: 'کد پرسنلی سرپرست مستقیم', 
+        accessor: (emp) => employees.find(s => s.id === emp.supervisorId)?.code || '' 
+      },
+      { 
+        key: 'peer', 
+        label: 'کد پرسنلی ارزیاب همتا', 
+        accessor: (emp) => employees.find(s => s.id === emp.peerReviewerId)?.code || '' 
+      },
+      { 
+        key: 'approver', 
+        label: 'کد پرسنلی تصویب‌کننده', 
+        accessor: (emp) => employees.find(s => s.id === emp.approverId)?.code || '' 
+      }
+    ],
+    templateSampleRows: [
+      {
+        'نام و نام خانوادگی': 'مهندس علی رضایی',
+        'کد پرسنلی': 'EMP-1001',
+        'واحد سازمانی': 'سالن ماشین‌کاری ۱',
+        'عنوان رده شغلی': 'اپراتور ارشد تراشکاری CNC',
+        'نقش کاربری': 'کارمند',
+        'نام کاربری': 'ali_rezaei',
+        'کد پرسنلی سرپرست مستقیم': 'EMP-1008',
+        'کد پرسنلی ارزیاب همتا': 'EMP-1002',
+        'کد پرسنلی تصویب‌کننده': 'EMP-1008'
+      },
+      {
+        'نام و نام خانوادگی': 'مهندس کامران صباغی',
+        'کد پرسنلی': 'EMP-1008',
+        'واحد سازمانی': 'سالن ماشین‌کاری ۱',
+        'عنوان رده شغلی': 'سرپرست تولید و ماشین‌کاری',
+        'نقش کاربری': 'سرپرست',
+        'نام کاربری': 'kamran',
+        'کد پرسنلی سرپرست مستقیم': '',
+        'کد پرسنلی ارزیاب همتا': '',
+        'کد پرسنلی تصویب‌کننده': ''
+      }
+    ],
+    onImport: (importedItems, mode) => {
+      let successCount = 0;
+      const errors: string[] = [];
+      const defaultProfId = profiles[0]?.id || 'prof-1';
+
+      importedItems.forEach((rawItem: any, index: number) => {
+        const rowNum = index + 1;
+        const name = (rawItem.name || rawItem['نام و نام خانوادگی'] || '').trim();
+        const code = (rawItem.code || rawItem['کد پرسنلی'] || '').trim().toUpperCase();
+        const unit = (rawItem.unit || rawItem['واحد سازمانی'] || 'سالن تولید').trim();
+        
+        // Match profile by ID, title, or code
+        const rawProf = (rawItem.profile || rawItem.profileId || rawItem['عنوان رده شغلی'] || rawItem['پروفایل شغلی'] || '').trim();
+        let profileId = defaultProfId;
+        if (rawProf) {
+          const matchedProfile = profiles.find(p => 
+            p.id === rawProf || 
+            p.code.toLowerCase() === rawProf.toLowerCase() || 
+            p.title.toLowerCase() === rawProf.toLowerCase()
+          );
+          if (matchedProfile) {
+            profileId = matchedProfile.id;
+          }
+        }
+
+        // Match Role
+        const rawRole = (rawItem.role || rawItem['نقش کاربری'] || rawItem['نقش'] || 'employee').trim().toLowerCase();
+        let role: UserRole = 'employee';
+        if (rawRole.includes('admin') || rawRole.includes('مدیر')) {
+          role = 'admin';
+        } else if (rawRole.includes('supervisor') || rawRole.includes('سرپرست')) {
+          role = 'supervisor';
+        }
+
+        // Username
+        let username = (rawItem.username || rawItem['نام کاربری'] || '').trim().toLowerCase();
+        if (!username && code) {
+          username = `user_${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+        }
+
+        // Supervisors & Hierarchy IDs
+        const rawSupCode = (rawItem.supervisor || rawItem.supervisorId || rawItem['کد پرسنلی سرپرست مستقیم'] || '').trim().toUpperCase();
+        const supervisor = rawSupCode ? employees.find(e => e.code.toUpperCase() === rawSupCode || e.id === rawSupCode) : undefined;
+
+        const rawPeerCode = (rawItem.peer || rawItem.peerReviewerId || rawItem['کد پرسنلی ارزیاب همتا'] || '').trim().toUpperCase();
+        const peer = rawPeerCode ? employees.find(e => e.code.toUpperCase() === rawPeerCode || e.id === rawPeerCode) : undefined;
+
+        const rawApproverCode = (rawItem.approver || rawItem.approverId || rawItem['کد پرسنلی تصویب‌کننده'] || '').trim().toUpperCase();
+        const approver = rawApproverCode ? employees.find(e => e.code.toUpperCase() === rawApproverCode || e.id === rawApproverCode) : undefined;
+
+        const candidate = {
+          name,
+          code,
+          unit,
+          profileId,
+          role,
+          username,
+          supervisorId: supervisor?.id,
+          peerReviewerId: peer?.id,
+          approverId: approver?.id
+        };
+
+        const validation = validateEmployeeInput(candidate);
+        if (!validation.success) {
+          errors.push(`سطر ${rowNum} (${name || code || 'ناشناس'}): ${validation.errors.join('، ')}`);
+          return;
+        }
+
+        const validEmp = validation.data;
+        const existingEmp = employees.find(e => e.code.toUpperCase() === validEmp.code.toUpperCase() || e.username.toLowerCase() === validEmp.username.toLowerCase());
+
+        if (existingEmp) {
+          if (mode === 'replace' || mode === 'merge') {
+            onUpdateEmployee(existingEmp.id, validEmp);
+            successCount++;
+          }
+        } else {
+          onAddEmployee(validEmp);
+          successCount++;
+        }
+      });
+
+      return {
+        count: successCount,
+        message: `تعداد ${successCount} پرونده پرسنلی با موفقیت در سامانه ثبت و به‌روزرسانی شد.`,
+        errors
+      };
+    }
+  };
 
   // Bulk benchmark generator (for testing >1,000 employees performance)
   const handleGenerateScaleEmployees = (count: number) => {
@@ -165,16 +322,32 @@ export default function Employees({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName || !formCode || !formUnit || !formProfileId || !formUsername) {
-      setErrorMsg('تکمیل تمامی فیلدها از جمله نام کاربری الزامی است.');
+    setErrorMsg('');
+
+    const rawData = {
+      name: formName,
+      code: formCode,
+      unit: formUnit,
+      profileId: formProfileId,
+      role: formRole,
+      username: formUsername,
+      supervisorId: formSupervisorId || undefined,
+      peerReviewerId: formPeerReviewerId || undefined,
+      calibrationLeadId: formCalibrationLeadId || undefined,
+      approverId: formApproverId || undefined
+    };
+
+    const validation = validateEmployeeInput(rawData);
+    if (!validation.success) {
+      setErrorMsg(validation.errors.join(' | '));
       return;
     }
 
-    const cleanedUsername = formUsername.trim().toLowerCase();
+    const payload = validation.data;
 
     // Check duplicate username (except current editing user)
     const isDuplicateUser = employees.some(
-      emp => emp.username.toLowerCase() === cleanedUsername && emp.id !== editingId
+      emp => emp.username.toLowerCase() === payload.username.toLowerCase() && emp.id !== editingId
     );
 
     if (isDuplicateUser) {
@@ -182,18 +355,15 @@ export default function Employees({
       return;
     }
 
-    const payload: Omit<Employee, 'id'> = {
-      name: formName.trim(),
-      code: formCode.trim().toUpperCase(),
-      unit: formUnit.trim(),
-      profileId: formProfileId,
-      role: formRole,
-      username: cleanedUsername,
-      supervisorId: formSupervisorId || undefined,
-      peerReviewerId: formPeerReviewerId || undefined,
-      calibrationLeadId: formCalibrationLeadId || undefined,
-      approverId: formApproverId || undefined
-    };
+    // Check duplicate code (except current editing user)
+    const isDuplicateCode = employees.some(
+      emp => emp.code.toUpperCase() === payload.code.toUpperCase() && emp.id !== editingId
+    );
+
+    if (isDuplicateCode) {
+      setErrorMsg('این کد پرسنلی قبلاً برای همکار دیگری ثبت شده است.');
+      return;
+    }
 
     if (editingId) {
       onUpdateEmployee(editingId, payload);
@@ -315,6 +485,15 @@ export default function Employees({
           </p>
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsExchangeModalOpen(true)}
+            className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-bold px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+            <span>مرکز تبادل داده (Import / Export)</span>
+          </button>
+
           <button
             onClick={() => {
               setBulkStatusMsg(null);
@@ -840,6 +1019,14 @@ export default function Employees({
           </div>
         </div>
       )}
+
+      {/* Universal Import / Export Modal */}
+      <UniversalDataExchange<Employee>
+        config={employeesExchangeConfig}
+        isOpen={isExchangeModalOpen}
+        onClose={() => setIsExchangeModalOpen(false)}
+        theme={theme}
+      />
     </div>
   );
 }

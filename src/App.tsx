@@ -45,6 +45,12 @@ import {
 import { Criterion, JobProfile, Employee, Evaluation } from './types';
 import { SEED_CRITERIA, SEED_PROFILES, SEED_EMPLOYEES, SEED_EVALUATIONS } from './seedData';
 import { browserNotifications } from './utils/browserNotifications';
+import { 
+  validateEmployeeInput, 
+  validateCriterionInput, 
+  validateJobProfileInput, 
+  clearLegacyAdminSessions 
+} from './utils/validation';
 
 // --- CLOUD SYNC WRAPPER WITH ISOLATED SESSIONS ---
 let syncTimeout: any = null;
@@ -192,7 +198,19 @@ function MainApp() {
     if (sessionSaved) {
       try {
         const parsed = JSON.parse(sessionSaved);
-        return sanitizeUser(parsed);
+        const user = sanitizeUser(parsed);
+        if (user && user.role === 'admin') {
+          const sessionLoggedAt = sessionStorage.getItem('pe_admin_session_logged_at');
+          const passUpdatedAt = localStorage.getItem('pe_admin_password_updated_at');
+          if (sessionLoggedAt && passUpdatedAt) {
+            if (new Date(passUpdatedAt).getTime() > new Date(sessionLoggedAt).getTime()) {
+              // Admin password changed after session was created -> invalidate session
+              clearLegacyAdminSessions();
+              return null;
+            }
+          }
+        }
+        return user;
       } catch {
         return null;
       }
@@ -215,11 +233,38 @@ function MainApp() {
       if (savedEmp) setEmployees(sanitizeEmployees(JSON.parse(savedEmp)));
       const savedEval = localStorage.getItem('pe_evaluations');
       if (savedEval) setEvaluations(JSON.parse(savedEval));
+
+      // Invalidate admin session if password updated in another tab
+      if (currentUser?.role === 'admin') {
+        const sessionLoggedAt = sessionStorage.getItem('pe_admin_session_logged_at');
+        const passUpdatedAt = localStorage.getItem('pe_admin_password_updated_at');
+        if (sessionLoggedAt && passUpdatedAt) {
+          if (new Date(passUpdatedAt).getTime() > new Date(sessionLoggedAt).getTime()) {
+            clearLegacyAdminSessions();
+            setCurrentUser(null);
+            setCurrentTab('dashboard');
+          }
+        }
+      }
     };
 
     window.addEventListener('storage', handleStorageUpdate);
     return () => window.removeEventListener('storage', handleStorageUpdate);
-  }, []);
+  }, [currentUser]);
+
+  // Invalidate persistent admin session on admin password change event
+  useEffect(() => {
+    const handleAdminPasswordChangedEvent = () => {
+      if (currentUser?.role === 'admin') {
+        clearLegacyAdminSessions();
+        setCurrentUser(null);
+        setCurrentTab('dashboard');
+      }
+    };
+
+    window.addEventListener('pe_admin_password_changed', handleAdminPasswordChangedEvent);
+    return () => window.removeEventListener('pe_admin_password_changed', handleAdminPasswordChangedEvent);
+  }, [currentUser]);
 
   const handleRequestNotification = async () => {
     const granted = await browserNotifications.requestPermission();
@@ -390,13 +435,7 @@ function MainApp() {
     }
   }, [currentUser, evaluations, employees, notificationPermission]);
 
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('pe_current_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('pe_current_user');
-    }
-  }, [currentUser]);
+  // Session user storage is handled strictly inside sessionStorage on handleLogin / handleLogout
 
   useEffect(() => {
     localStorage.setItem('pe_certified_badge', hasCertifiedBadge ? 'true' : 'false');
@@ -420,6 +459,9 @@ function MainApp() {
     const sanitized = sanitizeUser(emp);
     if (!sanitized) return;
     sessionStorage.setItem('pe_session_user', JSON.stringify(sanitized));
+    if (sanitized.role === 'admin') {
+      sessionStorage.setItem('pe_admin_session_logged_at', new Date().toISOString());
+    }
     setCurrentUser(sanitized);
     
     // Check if onboarding or tour is needed for this role
@@ -447,13 +489,18 @@ function MainApp() {
   };
 
   const handleLogout = () => {
-    sessionStorage.removeItem('pe_session_user');
+    clearLegacyAdminSessions();
     sessionStorage.removeItem('pe_last_notif_alert');
     sessionStorage.removeItem('pe_last_notif_emp_alert');
-    localStorage.removeItem('pe_current_user');
     setCurrentUser(null);
     setCurrentTab('dashboard');
   };
+
+  const handleForceAdminReauth = useCallback(() => {
+    clearLegacyAdminSessions();
+    setCurrentUser(null);
+    setCurrentTab('dashboard');
+  }, []);
 
   const handleSwitchUser = (empId: string) => {
     const emp = employees.find(e => e.id === empId);
@@ -461,6 +508,9 @@ function MainApp() {
       const sanitized = sanitizeUser(emp);
       if (!sanitized) return;
       sessionStorage.setItem('pe_session_user', JSON.stringify(sanitized));
+      if (sanitized.role === 'admin') {
+        sessionStorage.setItem('pe_admin_session_logged_at', new Date().toISOString());
+      }
       setCurrentUser(sanitized);
       
       const hasSeenRoleTour = localStorage.getItem('pe_tour_completed_' + sanitized.id + '_' + sanitized.role);
@@ -522,17 +572,47 @@ function MainApp() {
   };
 
   const handleAddCriterion = (crit: Omit<Criterion, 'id'>): boolean => {
-    const exists = criteria.some(c => c.code === crit.code);
+    const valResult = validateCriterionInput(crit);
+    if (!valResult.success) {
+      alert(valResult.errors.join('\n'));
+      return false;
+    }
+    const validated = valResult.data;
+    const exists = criteria.some(c => c.code.trim().toUpperCase() === validated.code.trim().toUpperCase());
     if (exists) return false;
-    const newCrit: Criterion = { id: `crit-${Math.random().toString(36).substring(2, 9)}`, ...crit };
-    setCriteria([...criteria, newCrit]);
+    const newCrit: Criterion = { 
+      id: `crit-${Math.random().toString(36).substring(2, 9)}`, 
+      code: validated.code,
+      cat: validated.cat,
+      name: validated.name,
+      def: validated.def,
+      source: validated.source,
+      method: validated.method,
+      dir: validated.dir
+    };
+    setCriteria(prev => [...prev, newCrit]);
     return true;
   };
 
   const handleUpdateCriterion = (id: string, crit: Omit<Criterion, 'id'>): boolean => {
-    const isDuplicate = criteria.some(c => c.code === crit.code && c.id !== id);
+    const valResult = validateCriterionInput(crit);
+    if (!valResult.success) {
+      alert(valResult.errors.join('\n'));
+      return false;
+    }
+    const validated = valResult.data;
+    const isDuplicate = criteria.some(c => c.code.trim().toUpperCase() === validated.code.trim().toUpperCase() && c.id !== id);
     if (isDuplicate) return false;
-    setCriteria(criteria.map(c => c.id === id ? { ...c, ...crit } : c));
+    setCriteria(prev => prev.map(c => c.id === id ? { 
+      ...c, 
+      code: validated.code,
+      cat: validated.cat,
+      name: validated.name,
+      def: validated.def,
+      source: validated.source,
+      method: validated.method,
+      dir: validated.dir
+    } : c));
     return true;
   };
 
@@ -546,12 +626,38 @@ function MainApp() {
   };
 
   const handleAddProfile = (prof: Omit<JobProfile, 'id'>) => {
-    const newProf: JobProfile = { id: `prof-${Math.random().toString(36).substring(2, 9)}`, ...prof };
-    setProfiles([...profiles, newProf]);
+    const valResult = validateJobProfileInput(prof);
+    if (!valResult.success) {
+      alert(valResult.errors.join('\n'));
+      return;
+    }
+    const validated = valResult.data;
+    const newProf: JobProfile = { 
+      id: `prof-${Math.random().toString(36).substring(2, 9)}`, 
+      title: validated.title,
+      code: validated.code,
+      family: validated.family,
+      locked: validated.locked,
+      items: validated.items
+    };
+    setProfiles(prev => [...prev, newProf]);
   };
 
   const handleUpdateProfile = (id: string, prof: Omit<JobProfile, 'id'>) => {
-    setProfiles(profiles.map(p => p.id === id ? { ...p, ...prof } : p));
+    const valResult = validateJobProfileInput(prof);
+    if (!valResult.success) {
+      alert(valResult.errors.join('\n'));
+      return;
+    }
+    const validated = valResult.data;
+    setProfiles(prev => prev.map(p => p.id === id ? { 
+      ...p, 
+      title: validated.title,
+      code: validated.code,
+      family: validated.family,
+      locked: validated.locked,
+      items: validated.items
+    } : p));
   };
 
   const handleDeleteProfile = (id: string) => {
@@ -568,12 +674,50 @@ function MainApp() {
   };
 
   const handleAddEmployee = (emp: Omit<Employee, 'id'>) => {
-    const newEmp: Employee = { id: `emp-${Math.random().toString(36).substring(2, 9)}`, ...emp };
-    setEmployees([...employees, newEmp]);
+    const valResult = validateEmployeeInput(emp);
+    if (!valResult.success) {
+      alert(valResult.errors.join('\n'));
+      return;
+    }
+    const validated = valResult.data;
+    const newEmp: Employee = { 
+      id: `emp-${Math.random().toString(36).substring(2, 9)}`, 
+      name: validated.name,
+      code: validated.code,
+      unit: validated.unit,
+      profileId: validated.profileId,
+      role: validated.role,
+      username: validated.username,
+      supervisorId: validated.supervisorId,
+      peerReviewerId: validated.peerReviewerId,
+      calibrationLeadId: validated.calibrationLeadId,
+      approverId: validated.approverId,
+      hrPartnerId: validated.hrPartnerId
+    };
+    setEmployees(prev => [...prev, newEmp]);
   };
 
   const handleUpdateEmployee = (id: string, emp: Omit<Employee, 'id'>) => {
-    setEmployees(employees.map(e => e.id === id ? { ...e, ...emp } : e));
+    const valResult = validateEmployeeInput(emp);
+    if (!valResult.success) {
+      alert(valResult.errors.join('\n'));
+      return;
+    }
+    const validated = valResult.data;
+    setEmployees(prev => prev.map(e => e.id === id ? { 
+      ...e, 
+      name: validated.name,
+      code: validated.code,
+      unit: validated.unit,
+      profileId: validated.profileId,
+      role: validated.role,
+      username: validated.username,
+      supervisorId: validated.supervisorId,
+      peerReviewerId: validated.peerReviewerId,
+      calibrationLeadId: validated.calibrationLeadId,
+      approverId: validated.approverId,
+      hrPartnerId: validated.hrPartnerId
+    } : e));
   };
 
   const handleDeleteEmployee = (id: string) => {
@@ -679,15 +823,48 @@ function MainApp() {
         <div className="max-w-7xl mx-auto space-y-6">
           {currentTab === 'dashboard' && <Dashboard criteria={criteria} profiles={profiles} employees={employees} evaluations={evaluations} onNavigate={setCurrentTab} onSelectEvaluation={handleSelectEvaluation} currentUser={currentUser} hasCertifiedBadge={hasCertifiedBadge} />}
           {currentTab === 'workflow' && <WorkflowManager currentUser={currentUser} evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} theme={theme} />}
-          {currentTab === 'criteria' && <CriteriaBank criteria={criteria} onAddCriterion={handleAddCriterion} onUpdateCriterion={handleUpdateCriterion} onDeleteCriterion={handleDeleteCriterion} />}
-          {currentTab === 'profiles' && <JobProfiles profiles={profiles} criteria={criteria} onAddProfile={handleAddProfile} onUpdateProfile={handleUpdateProfile} onDeleteProfile={handleDeleteProfile} onToggleLockProfile={handleToggleLockProfile} />}
-          {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onDeleteEmployee={handleDeleteEmployee} onStartEvaluation={handleStartEvaluationDirect} />}
+          {currentTab === 'criteria' && <CriteriaBank criteria={criteria} onAddCriterion={handleAddCriterion} onUpdateCriterion={handleUpdateCriterion} onDeleteCriterion={handleDeleteCriterion} theme={theme} />}
+          {currentTab === 'profiles' && <JobProfiles profiles={profiles} criteria={criteria} onAddProfile={handleAddProfile} onUpdateProfile={handleUpdateProfile} onDeleteProfile={handleDeleteProfile} onToggleLockProfile={handleToggleLockProfile} onAddCriterion={handleAddCriterion} theme={theme} />}
+          {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onDeleteEmployee={handleDeleteEmployee} onStartEvaluation={handleStartEvaluationDirect} theme={theme} />}
           {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onDeleteEvaluation={handleDeleteEvaluation} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} currentUser={currentUser} />}
           {currentTab === 'calibration' && <Calibration evaluations={evaluations} employees={employees} profiles={profiles} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} />}
           {currentTab === 'reports' && <Reports evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} />}
           {currentTab === 'onboarding' && <Onboarding currentUser={currentUser} onComplete={() => { if (currentUser) localStorage.setItem('pe_onboarded_' + currentUser.id, 'true'); if (currentUser && currentUser.role === 'employee') setCurrentTab('my-evaluation'); else setCurrentTab('dashboard'); }} hasCertifiedBadge={hasCertifiedBadge} onGrantBadge={() => setHasCertifiedBadge(true)} theme={theme} />}
           {currentTab === 'my-evaluation' && <MyEvaluation currentUser={currentUser} evaluations={evaluations} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onAddEvaluation={handleAddEvaluation} theme={theme} />}
-          {currentTab === 'settings' && <ManagementCenter employees={employees} profiles={profiles} criteria={criteria} evaluations={evaluations} onSetEmployees={setEmployees} onSetProfiles={setProfiles} onSetCriteria={setCriteria} onSetEvaluations={setEvaluations} currentUser={currentUser} theme={theme} />}
+          {currentTab === 'settings' && (
+            currentUser.role === 'admin' ? (
+              <ManagementCenter 
+                employees={employees} 
+                profiles={profiles} 
+                criteria={criteria} 
+                evaluations={evaluations} 
+                onSetEmployees={setEmployees} 
+                onSetProfiles={setProfiles} 
+                onSetCriteria={setCriteria} 
+                onSetEvaluations={setEvaluations} 
+                currentUser={currentUser} 
+                theme={theme} 
+                onForceReauth={handleForceAdminReauth}
+              />
+            ) : (
+              <div className="bg-rose-500/10 border border-rose-500/30 rounded-3xl p-8 text-center space-y-4 max-w-lg mx-auto mt-12 shadow-xl">
+                <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-black text-rose-300">⛔ عدم دسترسی مجاز به پرتال مدیریت</h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  تنظیمات پیشرفته و مرکز مدیریت سامانه منحصراً در اختیار مدیریت ارشد منابع انسانی با کلمه عبور اختصاصی می‌باشد.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setCurrentTab(currentUser.role === 'employee' ? 'my-evaluation' : 'dashboard')}
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+                >
+                  بازگشت به داشبورد
+                </button>
+              </div>
+            )
+          )}
         </div>
       </main>
 

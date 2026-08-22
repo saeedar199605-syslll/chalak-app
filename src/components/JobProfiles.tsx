@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { validateJobProfileInput } from '../utils/validation';
 import { 
   Briefcase, 
   Plus, 
@@ -15,7 +16,13 @@ import {
   CheckCircle2, 
   XCircle, 
   Info,
-  Scale
+  Scale,
+  Download,
+  UploadCloud,
+  FileSpreadsheet,
+  Layers,
+  Sparkles,
+  PlusCircle
 } from 'lucide-react';
 import { 
   JobProfile, 
@@ -25,8 +32,10 @@ import {
   MAX_WEIGHT, 
   MAX_CRITERIA_COUNT, 
   MANDATORY_SAFETY_CODE,
-  CATEGORIES
+  CATEGORIES,
+  CategoryKey
 } from '../types';
+import UniversalDataExchange, { DataExchangeConfig } from './UniversalDataExchange';
 
 interface JobProfilesProps {
   profiles: JobProfile[];
@@ -35,6 +44,8 @@ interface JobProfilesProps {
   onUpdateProfile: (id: string, prof: Omit<JobProfile, 'id'>) => void;
   onDeleteProfile: (id: string) => void;
   onToggleLockProfile: (id: string) => void;
+  onAddCriterion?: (crit: Omit<Criterion, 'id'>) => boolean;
+  theme?: 'dark' | 'light';
 }
 
 export default function JobProfiles({
@@ -43,10 +54,21 @@ export default function JobProfiles({
   onAddProfile,
   onUpdateProfile,
   onDeleteProfile,
-  onToggleLockProfile
+  onToggleLockProfile,
+  onAddCriterion,
+  theme = 'dark'
 }: JobProfilesProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
+
+  // Quick Criterion Add inside Profile Modal
+  const [isQuickCritOpen, setIsQuickCritOpen] = useState(false);
+  const [quickCritName, setQuickCritName] = useState('');
+  const [quickCritCode, setQuickCritCode] = useState('');
+  const [quickCritCat, setQuickCritCat] = useState<CategoryKey>('K');
+  const [quickCritDef, setQuickCritDef] = useState('');
+  const [quickCritError, setQuickCritError] = useState('');
 
   // Form values
   const [formTitle, setFormTitle] = useState('');
@@ -56,6 +78,105 @@ export default function JobProfiles({
   // Array of { cid: string, weight: number } for the profile
   const [selectedItems, setSelectedItems] = useState<ProfileItem[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Data Exchange Configuration for Profiles
+  const profilesExchangeConfig: DataExchangeConfig<JobProfile> = {
+    entityName: 'پروفایل‌ها و ماتریس‌های اوزان شغلی',
+    entityKey: 'job_profiles',
+    items: profiles,
+    csvHeaders: [
+      { key: 'title', label: 'عنوان رده شغلی' },
+      { key: 'code', label: 'کد شغل' },
+      { key: 'family', label: 'خانواده شغلی' },
+      { key: 'itemsCount', label: 'تعداد شاخص‌ها', accessor: (p) => p.items.length },
+      { 
+        key: 'itemsSummary', 
+        label: 'شاخص‌ها و اوزان', 
+        accessor: (p) => p.items.map(i => {
+          const c = criteria.find(cr => cr.id === i.cid);
+          return `${c?.code || i.cid}(${i.weight}%)`;
+        }).join(' | ') 
+      },
+      { key: 'locked', label: 'وضعیت تصویب', accessor: (p) => p.locked ? 'تصویب شده' : 'پیش‌نویس' }
+    ],
+    templateSampleRows: [
+      { 'عنوان رده شغلی': 'اپراتور ارشد تراشکاری CNC', 'کد شغل': 'OP-CNC-01', 'خانواده شغلی': 'فنی مهندسی', 'تعداد شاخص‌ها': '5', 'شاخص‌ها و اوزان': 'K-PRD-01(25%) | B-HSE-01(20%) | K-QC-01(20%) | B-TEAM-01(20%) | B-5S-01(15%)', 'وضعیت تصویب': 'تصویب شده' }
+    ],
+    onImport: (importedItems, mode) => {
+      let count = 0;
+      const errors: string[] = [];
+
+      importedItems.forEach((item: any, index: number) => {
+        const rowNum = index + 1;
+        const title = (item.title || item['عنوان رده شغلی'] || 'شغل جدید').trim();
+        const code = (item.code || item['کد شغل'] || `P-${Math.floor(Math.random() * 1000)}`).trim().toUpperCase();
+        const family = (item.family || item['خانواده شغلی'] || 'تولید').trim();
+        
+        let items: ProfileItem[] = [];
+        if (Array.isArray(item.items)) {
+          items = item.items;
+        } else {
+          // Try to parse summary string like: "K-PRD-01(25%) | B-HSE-01(20%)"
+          const summaryStr = (item.itemsSummary || item['شاخص‌ها و اوزان'] || '').toString();
+          if (summaryStr) {
+            const segments = summaryStr.split(/[|,;]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0);
+            segments.forEach((seg: string) => {
+              const match = seg.match(/^([A-Za-z0-9\-_]+)\s*\(?\s*(\d+)\s*%?\)?/);
+              if (match) {
+                const critCode = match[1].trim();
+                const weight = parseInt(match[2], 10);
+                const matchedCrit = criteria.find(c => c.code.toLowerCase() === critCode.toLowerCase() || c.id === critCode);
+                if (matchedCrit) {
+                  items.push({ cid: matchedCrit.id, weight });
+                }
+              }
+            });
+          }
+
+          // Fallback if no criteria parsed: add mandatory safety criterion
+          if (items.length === 0) {
+            const safetyCrit = criteria.find(c => c.code === MANDATORY_SAFETY_CODE) || criteria[0];
+            if (safetyCrit) {
+              items = [{ cid: safetyCrit.id, weight: 100 }];
+            }
+          }
+        }
+
+        const candidate = {
+          title,
+          code,
+          family,
+          items,
+          locked: false
+        };
+
+        const validation = validateJobProfileInput(candidate);
+        if (!validation.success) {
+          errors.push(`سطر ${rowNum} (${title} - ${code}): ${validation.errors.join('، ')}`);
+          return;
+        }
+
+        const validProfile = validation.data;
+        const existing = profiles.find(p => p.code.toLowerCase() === validProfile.code.toLowerCase());
+
+        if (existing) {
+          if (mode === 'replace' || mode === 'merge') {
+            onUpdateProfile(existing.id, validProfile);
+            count++;
+          }
+        } else {
+          onAddProfile(validProfile);
+          count++;
+        }
+      });
+
+      return {
+        count,
+        message: `تعداد ${count} پروفایل و الگوی شایستگی شغلی با موفقیت ثبت و به‌روزرسانی شد.`,
+        errors
+      };
+    }
+  };
 
   // Helper to validate profile weights and requirements
   const validateProfileItems = (items: ProfileItem[]): { ok: boolean; errors: string[]; warnings: string[] } => {
@@ -152,24 +273,29 @@ export default function JobProfiles({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle || !formCode) {
-      setErrorMsg('وارد کردن عنوان شغل و کد الزامی است.');
+    setErrorMsg('');
+
+    const validationItems = validateProfileItems(selectedItems);
+    if (!validationItems.ok) {
+      setErrorMsg(validationItems.errors[0]); // Show first error
       return;
     }
 
-    const validation = validateProfileItems(selectedItems);
-    if (!validation.ok) {
-      setErrorMsg(validation.errors[0]); // Show first error
-      return;
-    }
-
-    const payload = {
-      title: formTitle.trim(),
-      code: formCode.trim().toUpperCase(),
-      family: formFamily.trim() || 'عمومی',
+    const rawData = {
+      title: formTitle,
+      code: formCode,
+      family: formFamily || 'عمومی',
       items: selectedItems,
       locked: false
     };
+
+    const validation = validateJobProfileInput(rawData);
+    if (!validation.success) {
+      setErrorMsg(validation.errors.join(' | '));
+      return;
+    }
+
+    const payload = validation.data;
 
     if (editingId) {
       onUpdateProfile(editingId, payload);
@@ -192,13 +318,23 @@ export default function JobProfiles({
             نگاشت اهداف کمی و کیفی متناسب با اقتضائات نقشی پرسنل • مهار سلیقه‌گرایی و تضمین عدالت ارزیابی
           </p>
         </div>
-        <button
-          onClick={() => openForm()}
-          className="bg-teal-500 hover:bg-teal-600 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-teal-500/10 cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>ایجاد پروفایل شایستگی جدید</span>
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            onClick={() => setIsExchangeModalOpen(true)}
+            className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-bold px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm"
+          >
+            <Download className="w-4 h-4" />
+            <span>ورود و خروجی پروفایل‌ها (اکسل/JSON)</span>
+          </button>
+
+          <button
+            onClick={() => openForm()}
+            className="bg-teal-500 hover:bg-teal-600 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-teal-500/10 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>ایجاد پروفایل شایستگی جدید</span>
+          </button>
+        </div>
       </div>
 
       {/* Info constraints summary */}
@@ -433,14 +569,122 @@ export default function JobProfiles({
 
               {/* Criterion Selector & Weighting list */}
               <div className="space-y-2">
-                <div className="flex justify-between items-center text-xs">
-                  <label className="font-bold text-slate-300">شاخص‌های ارزیابی و اوزان شایستگی</label>
+                <div className="flex justify-between items-center text-xs flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <label className="font-bold text-slate-300">شاخص‌های ارزیابی و اوزان شایستگی</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuickCritName('');
+                        setQuickCritCode(`K-${Date.now().toString().slice(-4)}`);
+                        setQuickCritCat('K');
+                        setQuickCritDef('');
+                        setQuickCritError('');
+                        setIsQuickCritOpen(!isQuickCritOpen);
+                      }}
+                      className="text-[11px] bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 px-2.5 py-0.5 rounded-lg font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <PlusCircle className="w-3.5 h-3.5" />
+                      <span>تعریف و افزودن شاخص جدید به بانک معیارها</span>
+                    </button>
+                  </div>
                   <span className={`px-2 py-0.5 rounded font-mono font-bold ${
                     totalCurrentWeight === 100 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-orange-500/10 text-orange-400'
                   }`}>
                     مجموع اوزان فعلی: {totalCurrentWeight}٪ (باید دقیقاً ۱۰۰٪ باشد)
                   </span>
                 </div>
+
+                {/* Inline Quick Criterion Creation Box */}
+                {isQuickCritOpen && (
+                  <div className="p-3 bg-indigo-950/40 border border-indigo-500/30 rounded-2xl space-y-2.5 animate-in fade-in">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-bold text-indigo-300">➕ تعریف شاخص جدید در بانک مرکزی معیارها:</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsQuickCritOpen(false)}
+                        className="text-slate-400 hover:text-white text-xs cursor-pointer"
+                      >
+                        بستن
+                      </button>
+                    </div>
+
+                    {quickCritError && (
+                      <div className="text-[11px] text-rose-400 font-bold bg-rose-500/10 p-1.5 rounded-lg">
+                        {quickCritError}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <input
+                        type="text"
+                        placeholder="نام شاخص جدید..."
+                        value={quickCritName}
+                        onChange={(e) => setQuickCritName(e.target.value)}
+                        className="bg-slate-950 border border-indigo-500/40 rounded-xl py-1.5 px-2.5 text-xs text-slate-100 placeholder:text-slate-500"
+                      />
+                      <input
+                        type="text"
+                        placeholder="کد شاخص (مثل: K-PRD-05)..."
+                        value={quickCritCode}
+                        onChange={(e) => setQuickCritCode(e.target.value)}
+                        className="bg-slate-950 border border-indigo-500/40 rounded-xl py-1.5 px-2.5 text-xs text-slate-100 font-mono"
+                      />
+                      <select
+                        value={quickCritCat}
+                        onChange={(e) => setQuickCritCat(e.target.value as CategoryKey)}
+                        className="bg-slate-950 border border-indigo-500/40 rounded-xl py-1.5 px-2.5 text-xs text-slate-100"
+                      >
+                        <option value="K">خروجی و عملکرد کمی (K)</option>
+                        <option value="B">شایستگی‌های رفتاری (B)</option>
+                        <option value="Q">کیفیت و مهارت تخصصی (Q)</option>
+                        <option value="S">نظم، ایمنی و HSE (S)</option>
+                        <option value="M">مدیریت و رهبری (M)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="تعریف عملیاتی و سنجه..."
+                        value={quickCritDef}
+                        onChange={(e) => setQuickCritDef(e.target.value)}
+                        className="flex-1 bg-slate-950 border border-indigo-500/40 rounded-xl py-1.5 px-2.5 text-xs text-slate-100 placeholder:text-slate-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!quickCritName.trim() || !quickCritCode.trim()) {
+                            setQuickCritError('نام و کد شاخص الزامی است.');
+                            return;
+                          }
+                          if (onAddCriterion) {
+                            const success = onAddCriterion({
+                              code: quickCritCode.trim(),
+                              name: quickCritName.trim(),
+                              cat: quickCritCat,
+                              def: quickCritDef.trim() || `تعریف عملیاتی ${quickCritName}`,
+                              dir: 'more'
+                            });
+                            if (success) {
+                              // We also need to select it
+                              const found = criteria.find(c => c.code.toLowerCase() === quickCritCode.trim().toLowerCase());
+                              if (found) {
+                                setSelectedItems(prev => [...prev, { cid: found.id, weight: 10 }]);
+                              }
+                              setIsQuickCritOpen(false);
+                            } else {
+                              setQuickCritError('کد شاخص تکراری است یا با خطا مواجه شد.');
+                            }
+                          }
+                        }}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-1.5 rounded-xl text-xs cursor-pointer shadow-md"
+                      >
+                        ثبت در بانک معیارها
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="border border-slate-800 rounded-xl overflow-hidden max-h-64 overflow-y-auto divide-y divide-slate-800/60 bg-slate-950/40">
                   {criteria.map((c) => {
@@ -520,6 +764,14 @@ export default function JobProfiles({
           </div>
         </div>
       )}
+
+      {/* Universal Data Exchange Modal for Job Profiles */}
+      <UniversalDataExchange
+        config={profilesExchangeConfig}
+        isOpen={isExchangeModalOpen}
+        onClose={() => setIsExchangeModalOpen(false)}
+        theme={theme}
+      />
     </div>
   );
 }

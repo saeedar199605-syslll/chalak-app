@@ -46,8 +46,10 @@ import {
   Target,
   Grid3X3,
   Sliders,
-  UserX
+  UserX,
+  Calendar
 } from 'lucide-react';
+import { downloadWorkflowCalendarICS, DEFAULT_WORKFLOW_DEADLINES } from '../utils/calendarExport';
 import {
   Employee,
   Evaluation,
@@ -702,6 +704,15 @@ export default function WorkflowManager({
 
         {/* Global Controls */}
         <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => downloadWorkflowCalendarICS(DEFAULT_WORKFLOW_DEADLINES)}
+            className="bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-3.5 py-2 rounded-2xl flex items-center gap-2 text-xs font-bold transition-all cursor-pointer shadow-sm"
+            title="دانلود تقویم سررسید ارزیابی (.ics) جهت ثبت در Google Calendar و Outlook"
+          >
+            <Calendar className="w-4 h-4 text-indigo-400" />
+            <span>خروجی تقویم مهلت‌ها (.ics)</span>
+          </button>
+
           <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 px-3.5 py-2 rounded-2xl">
             <Clock className="w-4 h-4 text-teal-400" />
             <span className="text-xs text-slate-400 font-medium">دوره ارزیابی:</span>

@@ -3,52 +3,27 @@ export async function onRequestPost(context) {
   try {
     const body = await request.json();
     const { employeeName, jobTitle, period, scores, note } = body;
-
     const apiKey = env.GEMINI_API_KEY;
-    if (!apiKey) {
-       return new Response(JSON.stringify({ error: "کلید API هوش مصنوعی یافت نشد." }), { status: 500 });
-    }
+    if (!apiKey) return new Response(JSON.stringify({ error: "کلید API یافت نشد." }), { status: 500 });
 
-    const prompt = `
-      شما به عنوان یک مربی توسعه فردی (IDP) حرفه ای عمل می کنید.
-      بر اساس اطلاعات زیر، بازخورد و برنامه توسعه فردی بنویسید:
+    const prompt = `شما به عنوان یک مربی توسعه فردی (IDP) حرفه ای عمل می کنید...
       - نام: ${employeeName}
       - عنوان: ${jobTitle}
       - دوره: ${period}
-
-      نمرات:
-      ${scores.map(s => `- شاخص [${s.code}] ${s.name} | سیستم: ${s.value} خودارزیابی: ${s.self} سند: ${s.doc || 'ندارد'}`).join('\n')}
-
-      یادداشت سرپرست: "${note || 'ندارد'}"
-
-      خروجی باید دقیقاً یک JSON با فیلدهای زیر باشد:
-      {"strengths": ["..."], "developmentAreas": ["..."], "actionItems": ["..."], "summary": "..."}
-    `;
+      نمرات: ${scores.map(s => `- [${s.code}] ${s.name} | سیستم: ${s.value} خودارزیابی: ${s.self}`).join('\n')}
+      یادداشت: "${note}"
+      خروجی دقیقاً یک JSON باشد: {"strengths": ["..."], "developmentAreas": ["..."], "actionItems": ["..."], "summary": "..."}`;
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json' }
-    };
-
-    const response = await fetch(geminiUrl, {
-       method: 'POST',
-       headers: { 'Content-Type': 'application/json' },
-       body: JSON.stringify(payload)
-    });
-
+    const payload = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json' } };
+    const response = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
 
-    const textResult = data.candidates[0].content.parts[0].text;
-    let cleanedResult = textResult.trim();
-    if (cleanedResult.startsWith('```json')) cleanedResult = cleanedResult.replace('```json', '').replace('```', '').trim();
-
-    return new Response(JSON.stringify({ feedback: JSON.parse(cleanedResult) }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
+    let textResult = data.candidates[0].content.parts[0].text.trim();
+    if (textResult.startsWith('```json')) textResult = textResult.replace('```json', '').replace('```', '').trim();
+    return new Response(JSON.stringify({ feedback: JSON.parse(textResult) }), { headers: { 'Content-Type': 'application/json' } });
   } catch (error) {
-    return new Response(JSON.stringify({ error: 'خطا در ارتباط با هوش مصنوعی', details: error.message }), { status: 500 });
+    return new Response(JSON.stringify({ error: 'خطا', details: error.message }), { status: 500 });
   }
 }

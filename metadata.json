@@ -1,6 +1,6 @@
 {
   "name": "Performance Evaluation & AI Coaching System",
-  "description": "سامانه ارزیابی عملکرد، کالیبراسیون و تحلیل هوشمند پیش‌بینی روند رشد شایستگی پرسنل با مدیریت دسترسی‌های فردی و سازمانی",
+  "description": "سامانه ارزیابی عملکرد، کالیبراسیون، تحلیل هوشمند شایستگی پرسنل و مرکز جامع تبادل و مهاجرت کلان داده‌ها (Import/Export/Backup)",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

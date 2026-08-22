@@ -56,7 +56,7 @@ export default function Onboarding({ currentUser, onComplete, hasCertifiedBadge,
         <div className="p-4 bg-teal-500/10 border border-teal-500/20 rounded-2xl">
           <p className="text-sm font-black text-teal-400">به چرخه توسعه و ارزیابی شایستگی‌های شرکت اصفهان چالاک خوش‌آمدید!</p>
           <p className="text-slate-300 dark:text-slate-300 text-[11px] mt-1.5 leading-relaxed">
-            شرکت تولیدی و صنعتی <strong className="text-teal-400">اصفهان چالاک</strong> ارزیابی عملکرد را بستری برای رشد، یادگیری، کشف استعدادها و توانمندسازی تک‌تک اعضای خانواده چالاک می‌داند.
+            <strong className="text-teal-400">شرکت اصفهان چالاک</strong> ارزیابی عملکرد را بستری برای رشد، یادگیری، کشف استعدادها و توانمندسازی تک‌تک اعضای خانواده چالاک می‌داند.
           </p>
         </div>
 

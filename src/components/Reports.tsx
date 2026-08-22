@@ -12,10 +12,14 @@ import {
   Activity, 
   Building2,
   FileCheck2,
-  CheckCircle2
+  CheckCircle2,
+  Calendar,
+  Sparkles
 } from 'lucide-react';
 import { Evaluation, Employee, JobProfile, Criterion, CATEGORIES, getGrade, GRADE_DETAILS } from '../types';
 import RadarChartD3, { CompetencyDimensionData } from './RadarChartD3';
+import NineBoxAIAnalysis from './NineBoxAIAnalysis';
+import { downloadWorkflowCalendarICS, DEFAULT_WORKFLOW_DEADLINES } from '../utils/calendarExport';
 
 interface ReportsProps {
   evaluations: Evaluation[];
@@ -196,13 +200,25 @@ export default function Reports({
             تجزیه و تحلیل نقاط قوت و ضعف دپارتمان‌ها بر مبنای طبقات شایستگی، مربیگری و موازین مصوب
           </p>
         </div>
-        <button
-          onClick={handleExportCSV}
-          className="bg-teal-500 hover:bg-teal-600 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-teal-500/10 cursor-pointer"
-        >
-          <Download className="w-4 h-4" />
-          <span>خروجی اکسل / CSV کامل داده‌ها</span>
-        </button>
+        
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            onClick={() => downloadWorkflowCalendarICS(DEFAULT_WORKFLOW_DEADLINES)}
+            className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 font-bold px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm"
+            title="دانلود فایل iCalendar (.ics) جهت افزودن تقویم مهلت‌ها به Google Calendar و Outlook"
+          >
+            <Calendar className="w-4 h-4 text-indigo-400" />
+            <span>خروجی تقویم مهلت‌ها (.ics)</span>
+          </button>
+
+          <button
+            onClick={handleExportCSV}
+            className="bg-teal-500 hover:bg-teal-600 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-teal-500/10 cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            <span>خروجی اکسل / CSV کامل داده‌ها</span>
+          </button>
+        </div>
       </div>
 
       {/* Main Charts Row */}
@@ -349,6 +365,14 @@ export default function Reports({
           </div>
         </div>
       </div>
+
+      {/* AI-Powered 9-Box Talent Matrix Strategic Analysis */}
+      <NineBoxAIAnalysis
+        evaluations={evaluations}
+        employees={employees}
+        profiles={profiles}
+        criteria={criteria}
+      />
 
       {/* Full Detail Results Table */}
       <div className="bg-slate-800/20 border border-slate-800 rounded-2xl overflow-hidden p-5 space-y-4">

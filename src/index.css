@@ -55,21 +55,65 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.02em;
   line-height: 1.4;
   text-wrap: balance;
+  text-shadow: none !important;
 }
 
 p, span, label, td, th {
   line-height: 1.65;
+  text-shadow: none !important;
 }
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
-/* Responsive Table Scroll Styling */
+/* Responsive Table Scroll & Complete Shadow Overlap Elimination */
 .table-responsive {
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  isolation: isolate;
+}
+
+/* Ensure no obscuring shadows, blurry drop-shadows, or overlapping bleed on table rows/cells */
+table, tr, td, th, .virtualized-row, .table-cell-content {
+  text-shadow: none !important;
+  box-shadow: none !important;
+}
+
+/* Clean isolation for table containers to prevent underlying shadows from bleeding over text */
+.virtualized-table-container,
+[role="table"],
+.table-container {
+  isolation: isolate;
+  contain: paint;
+}
+
+/* Ensure sticky table headers stay opaque and crisp above scrolling rows */
+thead, th, .sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: none !important;
+}
+
+.virtualized-row {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.virtualized-row:hover {
+  background-color: rgba(30, 41, 59, 0.75) !important;
+}
+
+html.light-theme .virtualized-row:hover {
+  background-color: #f1f5f9 !important;
+}
+
+/* Clear z-index hierarchy and clean elevation for popovers, dropdowns & tooltips */
+.table-cell-content {
+  position: relative;
+  z-index: 1;
 }
 
 /* Sleek pulse animations */
