@@ -15,21 +15,28 @@ import {
   Trash2, 
   ArrowUpRight, 
   ArrowDownLeft, 
-  CheckCircle2,
-  AlertCircle,
-  UploadCloud,
-  Layers,
-  Sparkles,
-  Download
+  CheckCircle2, 
+  AlertCircle, 
+  UploadCloud, 
+  Layers, 
+  Sparkles, 
+  Download,
+  Calculator,
+  Zap
 } from 'lucide-react';
-import { Criterion, CategoryKey, CATEGORIES } from '../types';
+import { Criterion, CategoryKey, CATEGORIES, Employee, JobProfile, Evaluation } from '../types';
 import UniversalDataExchange, { DataExchangeConfig } from './UniversalDataExchange';
+import KpiFormulaEngineModal from './KpiFormulaEngineModal';
 
 interface CriteriaBankProps {
   criteria: Criterion[];
   onAddCriterion: (crit: Omit<Criterion, 'id'>) => boolean;
   onUpdateCriterion: (id: string, crit: Omit<Criterion, 'id'>) => boolean;
   onDeleteCriterion: (id: string) => void;
+  employees?: Employee[];
+  profiles?: JobProfile[];
+  evaluations?: Evaluation[];
+  onUpdateEvaluations?: (nextEvals: Evaluation[]) => void;
   theme?: 'dark' | 'light';
 }
 
@@ -82,6 +89,10 @@ export default function CriteriaBank({
   onAddCriterion, 
   onUpdateCriterion, 
   onDeleteCriterion,
+  employees = [],
+  profiles = [],
+  evaluations = [],
+  onUpdateEvaluations,
   theme = 'dark'
 }: CriteriaBankProps) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -175,6 +186,7 @@ export default function CriteriaBank({
   const [formMethod, setFormMethod] = useState('');
   const [formDir, setFormDir] = useState<'more' | 'less'>('more');
   const [errorMsg, setErrorMsg] = useState('');
+  const [isFormulaModalOpen, setIsFormulaModalOpen] = useState(false);
 
   const openForm = (crit?: Criterion) => {
     if (crit) {
@@ -321,6 +333,15 @@ export default function CriteriaBank({
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
           <button
+            type="button"
+            onClick={() => setIsFormulaModalOpen(true)}
+            className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
+          >
+            <Calculator className="w-4 h-4" />
+            <span>موتور فرمول‌ساز و محاسبات خودکار KPI</span>
+          </button>
+
+          <button
             onClick={() => setIsExchangeModalOpen(true)}
             className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-bold px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm"
           >
@@ -436,7 +457,7 @@ export default function CriteriaBank({
                       </span>
                     </td>
                     <td className="p-4 space-y-1">
-                      <div className="font-bold text-slate-200 flex items-center gap-2">
+                      <div className="font-bold text-slate-200 flex items-center gap-2 flex-wrap">
                         <span>{c.name}</span>
                         {c.cat === 'K' && (
                           <span className={`text-[9px] font-semibold flex items-center gap-0.5 px-1.5 py-0.5 rounded ${
@@ -453,6 +474,12 @@ export default function CriteriaBank({
                                 <span>معکوس (کمتر بهتر)</span>
                               </>
                             )}
+                          </span>
+                        )}
+                        {c.formulaExpression && (
+                          <span className="text-[9px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-md flex items-center gap-1">
+                            <Calculator className="w-3 h-3" />
+                            <span>{c.formulaExpression}</span>
                           </span>
                         )}
                       </div>
@@ -763,6 +790,20 @@ export default function CriteriaBank({
         config={criteriaExchangeConfig}
         isOpen={isExchangeModalOpen}
         onClose={() => setIsExchangeModalOpen(false)}
+        theme={theme}
+      />
+
+      {/* KPI Formula Engine Modal */}
+      <KpiFormulaEngineModal
+        isOpen={isFormulaModalOpen}
+        onClose={() => setIsFormulaModalOpen(false)}
+        criteria={criteria}
+        onAddCriterion={onAddCriterion}
+        onUpdateCriterion={onUpdateCriterion}
+        employees={employees || []}
+        profiles={profiles || []}
+        evaluations={evaluations || []}
+        onUpdateEvaluations={onUpdateEvaluations || (() => {})}
         theme={theme}
       />
     </div>

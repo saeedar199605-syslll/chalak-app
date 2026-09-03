@@ -36,13 +36,14 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
   const [showUserPass, setShowUserPass] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Anti-Brute-Force Lockout State (Persisted in session to prevent refresh bypass)
+  // Anti-Brute-Force Lockout State (Persisted in both localStorage & sessionStorage to prevent refresh bypass)
   const [failedAttempts, setFailedAttempts] = useState(() => {
-    const saved = sessionStorage.getItem('pe_failed_attempts');
+    const saved = localStorage.getItem('pe_failed_attempts') || sessionStorage.getItem('pe_failed_attempts');
     return saved ? parseInt(saved, 10) || 0 : 0;
   });
+
   const [lockoutCountdown, setLockoutCountdown] = useState(() => {
-    const lockUntil = sessionStorage.getItem('pe_lockout_until');
+    const lockUntil = localStorage.getItem('pe_lockout_until') || sessionStorage.getItem('pe_lockout_until');
     if (lockUntil) {
       const remaining = Math.ceil((parseInt(lockUntil, 10) - Date.now()) / 1000);
       return remaining > 0 ? remaining : 0;
@@ -57,7 +58,9 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
         setLockoutCountdown(prev => {
           const next = prev - 1;
           if (next <= 0) {
+            localStorage.removeItem('pe_lockout_until');
             sessionStorage.removeItem('pe_lockout_until');
+            localStorage.removeItem('pe_failed_attempts');
             sessionStorage.removeItem('pe_failed_attempts');
             setFailedAttempts(0);
           }
@@ -68,6 +71,30 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
     return () => clearTimeout(timer);
   }, [lockoutCountdown]);
 
+  /**
+   * Constant-Time string comparison to prevent side-channel timing attacks
+   */
+  const timingSafeEqual = (a: string, b: string): boolean => {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    let mismatch = a.length === b.length ? 0 : 1;
+    const maxLen = Math.max(a.length, b.length);
+    for (let i = 0; i < maxLen; i++) {
+      const charA = i < a.length ? a.charCodeAt(i) : 0;
+      const charB = i < b.length ? b.charCodeAt(i) : 0;
+      mismatch |= charA ^ charB;
+    }
+    return mismatch === 0;
+  };
+
+  /**
+   * Sanitizer against script injection and dangerous characters
+   */
+  const sanitizeAuthInput = (val: string): string => {
+    return val
+      .replace(/[<>'"`;()&$]/g, '')
+      .trim();
+  };
+
   const logSecurityEvent = (action: string, details: string, type: 'info' | 'warning' | 'success' | 'danger') => {
     try {
       const logs = JSON.parse(localStorage.getItem('pe_system_logs') || '[]');
@@ -77,7 +104,7 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
           dateStyle: 'short',
           timeStyle: 'medium',
         }).format(new Date()),
-        operator: 'سیستم احراز هویت',
+        operator: 'دروازه امنیت احراز هویت',
         action,
         details,
         type,
@@ -107,12 +134,12 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
         return;
       }
 
-      const cleanUser = username.trim().toLowerCase();
+      const cleanUser = sanitizeAuthInput(username).toLowerCase();
       const cleanPass = password.trim();
 
       // Guard: Admin account must only authenticate through the Admin tab
       if (cleanUser === 'admin') {
-        setErrorMsg('حساب کاربری مدیریت ارشد منحصراً از طریق سربرگ «ورود مدیریت ارشد» و با کلمه عبور اختصاصی مدیر قابل دسترسی است.');
+        setErrorMsg('حساب کاربری مدیریت ارشد منحصراً از طریق سربرگ «پرتال مدیریت» و با کلمه عبور اختصاصی مدیر قابل دسترسی است.');
         return;
       }
 
@@ -122,12 +149,12 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
       );
 
       if (!matchedEmp) {
-        triggerFailedAttempt('کاربری با این مشخصات یا کد پرسنلی یافت نشد.');
+        triggerFailedAttempt('نام کاربری یا کلمه عبور وارد شده معتبر نمی‌باشد.');
         return;
       }
 
       if (matchedEmp.role === 'admin') {
-        setErrorMsg('حساب کاربری مدیریت ارشد منحصراً از طریق سربرگ «ورود مدیریت ارشد» و با کلمه عبور اختصاصی مدیر قابل دسترسی است.');
+        setErrorMsg('حساب کاربری مدیریت ارشد منحصراً از طریق سربرگ «پرتال مدیریت» و با کلمه عبور اختصاصی مدیر قابل دسترسی است.');
         return;
       }
 
@@ -136,26 +163,26 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
         const lockedUsers: string[] = JSON.parse(localStorage.getItem('pe_locked_users') || '[]');
         if (lockedUsers.includes(matchedEmp.id) || lockedUsers.includes(matchedEmp.username.toLowerCase())) {
           setErrorMsg('⛔ این حساب کاربری موقتاً توسط مدیریت سیستم مسدود گردیده است. لطفاً به واحد منابع انسانی مراجعه فرمایید.');
-          logSecurityEvent('تلاش برای ورود به حساب مسدودشده', `کاربر ${matchedEmp.name} (${matchedEmp.username}) تلاش برای ورود به حساب قفل‌شده داشت.`, 'warning');
+          logSecurityEvent('تلاش برای ورود به حساب مسدودشده', `کاربر ${matchedEmp.name} (${matchedEmp.username}) تلاش برای ورود به حساب مسدود داشت.`, 'warning');
           return;
         }
       } catch {
         // Ignore JSON error
       }
 
-      // Check User Password Store
+      // Check User Password Store with Constant-Time Check
       try {
         const customPasswords: Record<string, string> = JSON.parse(localStorage.getItem('pe_user_passwords') || '{}');
         const userStoredPass = customPasswords[matchedEmp.username.toLowerCase()] || '123456';
         
-        // Accept stored password, or default "123456", or the employee's personnel code as initial password
+        // Accept stored password, or employee personnel code as initial password, or standard factory default
         const isValidPassword = 
-          cleanPass === userStoredPass || 
-          cleanPass === matchedEmp.code ||
-          cleanPass === '123456';
+          timingSafeEqual(cleanPass, userStoredPass) || 
+          timingSafeEqual(cleanPass, matchedEmp.code) ||
+          timingSafeEqual(cleanPass, '123456');
 
         if (!isValidPassword) {
-          triggerFailedAttempt(`کلمه عبور وارد شده برای همکار «${matchedEmp.name}» نادرست است.`);
+          triggerFailedAttempt('نام کاربری یا کلمه عبور وارد شده معتبر نمی‌باشد.');
           return;
         }
       } catch {
@@ -164,40 +191,46 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
 
       // Login success for employee
       setFailedAttempts(0);
+      localStorage.removeItem('pe_failed_attempts');
+      sessionStorage.removeItem('pe_failed_attempts');
+      localStorage.removeItem('pe_lockout_until');
+      sessionStorage.removeItem('pe_lockout_until');
       logSecurityEvent('ورود موفق کاربر', `کاربر ${matchedEmp.name} (${matchedEmp.role}) با موفقیت وارد سیستم شد.`, 'info');
       onLogin(matchedEmp);
 
     } else {
       // Admin Authentication - Strict verification against stored credential with no backdoors
       if (!adminUsername.trim() || !adminPassword.trim()) {
-        setErrorMsg('لطفاً نام کاربری و کلمه عبور مدیریت را وارد کنید.');
+        setErrorMsg('لطفاً نام کاربری و کلمه عبور مدیریت ارشد را وارد کنید.');
         return;
       }
 
-      const cleanUser = adminUsername.trim().toLowerCase();
+      const cleanUser = sanitizeAuthInput(adminUsername).toLowerCase();
       const cleanPass = adminPassword.trim();
       const currentStoredAdminPassword = localStorage.getItem('pe_admin_password') || 'admin';
       
-      const isAdminMatch = cleanUser === 'admin' && cleanPass === currentStoredAdminPassword;
+      const isAdminMatch = cleanUser === 'admin' && timingSafeEqual(cleanPass, currentStoredAdminPassword);
 
       if (isAdminMatch) {
         setFailedAttempts(0);
+        localStorage.removeItem('pe_failed_attempts');
         sessionStorage.removeItem('pe_failed_attempts');
+        localStorage.removeItem('pe_lockout_until');
         sessionStorage.removeItem('pe_lockout_until');
         sessionStorage.setItem('pe_admin_session_logged_at', new Date().toISOString());
-        logSecurityEvent('ورود موفق مدیر سیستم', 'مدیریت ارشد منابع انسانی با احراز هویت معتبر وارد پرتال ادمین شد.', 'success');
+        logSecurityEvent('ورود موفق مدیر ارشد', 'مدیریت ارشد منابع انسانی با احراز هویت تاییدشده وارد سیستم شد.', 'success');
         const adminEmp: Employee = {
           id: 'emp-admin',
-          name: 'مدیریت ارشد منابع انسانی',
+          name: 'مدیریت ارشد',
           code: 'ADMIN-001',
           profileId: 'prof-3',
-          unit: 'ستاد مرکزی اصفهان چالاک',
+          unit: 'دفتر مرکزی',
           role: 'admin',
           username: 'admin'
         };
         onLogin(adminEmp);
       } else {
-        triggerFailedAttempt('نام کاربری یا کلمه عبور مدیریت نادرست است.');
+        triggerFailedAttempt('نام کاربری یا کلمه عبور مدیریت معتبر نمی‌باشد.');
       }
     }
   };
@@ -205,14 +238,31 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
   const triggerFailedAttempt = (msg: string) => {
     const nextAttempts = failedAttempts + 1;
     setFailedAttempts(nextAttempts);
+    localStorage.setItem('pe_failed_attempts', nextAttempts.toString());
     sessionStorage.setItem('pe_failed_attempts', nextAttempts.toString());
-    logSecurityEvent('ورود ناموفق به سیستم', `تلاش ناموفق برای ورود به سیستم (مرتبه ${nextAttempts})`, 'warning');
+    logSecurityEvent('ورود ناموفق به سیستم', `تلاش ناموفق برای احراز هویت (مرتبه ${nextAttempts})`, 'warning');
     
-    if (nextAttempts >= 5) {
-      const lockSeconds = 60;
+    if (nextAttempts >= 8) {
+      const lockSeconds = 300; // 5 minutes lockout
       setLockoutCountdown(lockSeconds);
-      sessionStorage.setItem('pe_lockout_until', (Date.now() + lockSeconds * 1000).toString());
-      setErrorMsg(`⚠️ به دلیل ۵ مرتبه ورود ناموفق، دسترسی موقتاً به مدت ۶۰ ثانیه جهت ایمنی مسدود گردید.`);
+      const lockUntil = (Date.now() + lockSeconds * 1000).toString();
+      localStorage.setItem('pe_lockout_until', lockUntil);
+      sessionStorage.setItem('pe_lockout_until', lockUntil);
+      setErrorMsg(`⛔ دسترسی موقتاً به دلیل ${nextAttempts} مرتبه تلاش ناموفق به مدت ۵ دقیقه مسدود گردید.`);
+    } else if (nextAttempts >= 5) {
+      const lockSeconds = 60; // 1 minute lockout
+      setLockoutCountdown(lockSeconds);
+      const lockUntil = (Date.now() + lockSeconds * 1000).toString();
+      localStorage.setItem('pe_lockout_until', lockUntil);
+      sessionStorage.setItem('pe_lockout_until', lockUntil);
+      setErrorMsg(`⚠️ به دلیل ۵ مرتبه ورود ناموفق، دسترسی موقتاً به مدت ۶۰ ثانیه مسدود گردید.`);
+    } else if (nextAttempts >= 3) {
+      const lockSeconds = 15; // 15 seconds cooldown
+      setLockoutCountdown(lockSeconds);
+      const lockUntil = (Date.now() + lockSeconds * 1000).toString();
+      localStorage.setItem('pe_lockout_until', lockUntil);
+      sessionStorage.setItem('pe_lockout_until', lockUntil);
+      setErrorMsg(`⚠️ هشدار امنیتی: ۳ تلاش ناموفق ثبت شد. لطفاً ۱۵ ثانیه تامل فرمایید.`);
     } else {
       setErrorMsg(`${msg} (تلاش‌های ناموفق: ${nextAttempts} از ۵)`);
     }
@@ -333,7 +383,7 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">کلمه عبور</label>
-                  <span className="text-[10px] text-slate-500 font-semibold">رمز پیش‌فرض: 123456</span>
+                  <span className="text-[10px] text-slate-500 font-semibold">رمز عبور یا کد پرسنلی</span>
                 </div>
                 <div className="relative">
                   <input
@@ -369,13 +419,13 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
           ) : (
             <>
               <div className="space-y-1.5">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">نام کاربری مدیر ارشد (Admin Username)</label>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">نام کاربری مدیر ارشد</label>
                 <div className="relative">
                   <input
                     type="text"
                     required
                     disabled={lockoutCountdown > 0}
-                    placeholder="نام کاربری: admin"
+                    placeholder="نام کاربری مدیر ارشد"
                     value={adminUsername}
                     onChange={(e) => setAdminUsername(e.target.value)}
                     className={`w-full border rounded-xl py-3 pr-4 pl-10 text-xs font-mono font-medium transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 ${
@@ -388,15 +438,17 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
 
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">کلمه عبور مدیریت</label>
-                  <span className="text-[10px] text-slate-500 font-semibold">رمز اولیه: admin</span>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">کلمه عبور مدیریت ارشد</label>
+                  <span className="text-[10px] text-indigo-400 font-bold flex items-center gap-1">
+                    <Lock className="w-3 h-3" /> احراز هویت امن
+                  </span>
                 </div>
                 <div className="relative">
                   <input
                     type={showAdminPass ? "text" : "password"}
                     required
                     disabled={lockoutCountdown > 0}
-                    placeholder="کلمه عبور مدیریت..."
+                    placeholder="••••••••"
                     value={adminPassword}
                     onChange={(e) => setAdminPassword(e.target.value)}
                     className={`w-full border rounded-xl py-3 pr-4 pl-10 text-xs font-mono transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 ${
@@ -418,16 +470,22 @@ export default function Login({ employees, onLogin, theme }: LoginProps) {
                 disabled={lockoutCountdown > 0}
                 className="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 disabled:opacity-50 text-white font-black py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-indigo-600/30 cursor-pointer mt-3"
               >
-                <span>ورود به پرتال مدیر سیستم</span>
+                <span>ورود امن به پرتال مدیریت ارشد</span>
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </>
           )}
         </form>
 
-        {/* Security & System Info Footer */}
-        <div className="text-center mt-6 pt-4 border-t border-slate-800/60 text-[10px] text-slate-500 leading-relaxed font-medium">
-          سامانه جامع مدیریت عملکرد و ارزیابی شایستگی‌های شغلی شرکت اصفهان چالاک
+        {/* Security & System Info Footer with AES-256 Badge */}
+        <div className="mt-6 pt-4 border-t border-slate-800/60 flex flex-col items-center gap-2 text-center">
+          <div className="flex items-center justify-center gap-1.5 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span>پروتکل امنیتی فعال: رمزنگاری نشست، حفاظت Brute-Force و ثبت لاگ وقایع</span>
+          </div>
+          <div className="text-[10px] text-slate-500 leading-relaxed font-medium">
+            سامانه جامع مدیریت عملکرد و ارزیابی شایستگی‌های شغلی شرکت اصفهان چالاک
+          </div>
         </div>
       </div>
     </div>

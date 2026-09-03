@@ -5,6 +5,27 @@
 
 export type CategoryKey = 'K' | 'Q' | 'B' | 'S' | 'L';
 
+export interface KpiVariableDefinition {
+  key: string;            // e.g. "actual", "target", "scrap", "cycle_time"
+  label: string;          // e.g. "تولید واقعی", "برنامه مصوب"
+  unit?: string;          // e.g. "عدد", "ثانیه", "درصد"
+  defaultValue?: number;
+}
+
+export type KpiCalculationType = 
+  | 'ratio'           // (actual / target) * 100
+  | 'inverse_ratio'   // (standard / actual) * 100
+  | 'defect_rate'     // 100 - (scrap / total) * 100
+  | 'custom_formula'  // e.g. "(actual / target) * 90 + (quality * 0.1)"
+  | 'direct_score';   // مقیاس ۱ تا ۵ مستقیم
+
+export interface KpiScoreThresholds {
+  score5: number; // e.g. >= 105
+  score4: number; // e.g. >= 95
+  score3: number; // e.g. >= 85
+  score2: number; // e.g. >= 70
+}
+
 export interface Criterion {
   id: string;
   code: string;
@@ -13,7 +34,13 @@ export interface Criterion {
   def: string;
   source?: string;
   method?: string;
-  dir?: 'more' | 'less'; // 'more' = higher is better, 'less' = lower is better (only for K category)
+  dir?: 'more' | 'less'; // 'more' = higher is better, 'less' = lower is better
+  calculationType?: KpiCalculationType;
+  formulaExpression?: string;
+  variables?: KpiVariableDefinition[];
+  unit?: string;
+  targetValue?: number;
+  scoreThresholds?: KpiScoreThresholds;
 }
 
 export interface ProfileItem {
@@ -414,3 +441,183 @@ export const GRADE_DETAILS = {
   D: { label: 'نیازمند بهبود', color: 'orange', description: 'برخی از اهداف کلیدی محقق نشده و نیاز به مربیگری مستقیم دارد.' },
   E: { label: 'غیرقابل قبول', color: 'red', description: 'عملکرد بسیار پایین‌تر از استانداردهای پذیرفتنی است.' },
 };
+
+// ==========================================
+// LATTICE-STYLE TALENT & PERFORMANCE TYPES
+// ==========================================
+
+export type OKRConfidence = 'on_track' | 'at_risk' | 'behind' | 'completed';
+export type OKRLevel = 'company' | 'department' | 'individual';
+
+export interface OKRKeyResult {
+  id: string;
+  title: string;
+  metricType: 'percentage' | 'number' | 'currency' | 'boolean';
+  startValue: number;
+  currentValue: number;
+  targetValue: number;
+  unit: string;
+  confidence: OKRConfidence;
+  ownerName: string;
+  lastUpdated: string;
+}
+
+export interface OKRGoal {
+  id: string;
+  title: string;
+  description: string;
+  level: OKRLevel;
+  department: string;
+  ownerId: string;
+  ownerName: string;
+  period: string; // e.g. "۱۴۰۵ - سه‌ماهه اول"
+  category: 'strategic' | 'quality' | 'productivity' | 'safety' | 'innovation' | 'people';
+  progress: number; // 0 to 100
+  confidence: OKRConfidence;
+  keyResults: OKRKeyResult[];
+  alignmentParentId?: string; // Cascaded parent OKR
+  createdDate: string;
+  dueDate: string;
+}
+
+export interface TalkingPoint {
+  id: string;
+  text: string;
+  isCompleted: boolean;
+  addedBy: 'supervisor' | 'employee';
+}
+
+export interface OneOnOneActionItem {
+  id: string;
+  title: string;
+  assigneeName: string;
+  dueDate: string;
+  isDone: boolean;
+}
+
+export interface OneOnOneMeeting {
+  id: string;
+  empId: string;
+  empName: string;
+  supervisorId: string;
+  supervisorName: string;
+  scheduledDate: string; // e.g. "۱۴۰۵/۰۶/۱۵ ساعت ۱۰:۰۰"
+  period: string;
+  status: 'scheduled' | 'completed' | 'cancelled';
+  talkingPoints: TalkingPoint[];
+  actionItems: OneOnOneActionItem[];
+  sharedNotes?: string;
+  privateSupervisorNotes?: string;
+  moodRating?: number; // 1 to 5
+  meetingMinutes?: string;
+}
+
+export interface PraiseKudos {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: string;
+  receiverId: string;
+  receiverName: string;
+  companyValue: 'کیفیت برتر' | 'کار تیمی و همدلی' | 'تعهد به ایمنی و HSE' | 'نوآوری و خلاقیت فنی' | 'مسئولیت‌پذیری و انضباط';
+  badgeIcon: string;
+  message: string;
+  reactions: {
+    claps: number;
+    hearts: number;
+    rockets: number;
+    stars: number;
+  };
+  userReactions?: string[]; // current user reacted emojis
+  createdAt: string;
+}
+
+export interface Feedback360Request {
+  id: string;
+  targetEmpId: string;
+  targetEmpName: string;
+  reviewerEmpId: string;
+  reviewerEmpName: string;
+  relationship: 'peer' | 'subordinate' | 'cross_functional' | 'manager';
+  status: 'pending' | 'submitted';
+  period: string;
+  strengths?: string;
+  growthAreas?: string;
+  ratings?: Record<string, number>; // competencyId -> 1..5
+  submittedAt?: string;
+}
+
+export interface PulseSurveyMetric {
+  id: string;
+  title: string;
+  category: 'engagement' | 'manager_support' | 'workload' | 'recognition' | 'psychological_safety';
+  score: number; // 0 to 100
+  trend: 'up' | 'down' | 'stable';
+  changeValue: string; // e.g. "+4.2%"
+  responseRate: number; // e.g. 92%
+}
+
+// ==========================================
+// KICKIDLER-STYLE PRODUCTIVITY & ACTIVITY TYPES
+// ==========================================
+
+export type KickidlerLiveStatus = 'productive' | 'neutral' | 'unproductive' | 'idle' | 'offline';
+
+export interface TimeCategoryBreakdown {
+  productiveMinutes: number;   // زمان کار واقعی و ابزارهای مجاز
+  neutralMinutes: number;      // مکاتبات اداری، سرچ فنی
+  unproductiveMinutes: number; // شبکه‌های نامربوط، سایت‌های تفریحی، اتلاف وقت
+  idleMinutes: number;         // خواب سیستم، دور بودن از ایستگاه
+  totalWorkMinutes: number;    // کل زمان ثبت شده شیفت
+}
+
+export interface WorkdayActivityRecord {
+  id: string;
+  empId: string;
+  empName: string;
+  empCode: string;
+  unit: string;
+  date: string; // e.g. "۱۴۰۵/۰۶/۱۴"
+  timeBreakdown: TimeCategoryBreakdown;
+  productivityIndex: number; // 0 to 100% (Kickidler Efficiency Rate)
+  keystrokesCount: number;
+  mouseClicksCount: number;
+  activeAppTitle: string;
+  activeAppCategory: 'cad_cam' | 'mes_erp' | 'office_docs' | 'browsing' | 'idle';
+  burnoutRiskScore: number; // 0 to 100%
+  burnoutCategory: 'optimal' | 'high_workload' | 'burnout_risk' | 'underloaded';
+  violationsCount: number;
+}
+
+export interface LiveEmployeeActivity {
+  empId: string;
+  empName: string;
+  empCode: string;
+  unit: string;
+  status: KickidlerLiveStatus;
+  currentApp: string;
+  currentAppCategory: string;
+  shiftStartTime: string;
+  activeDurationMinutes: number;
+  todayProductivityRate: number; // %
+  todayIdleMinutes: number;
+  intensityRate: 'high' | 'medium' | 'low'; // ضربان فعالیت فعلی
+  lastActiveTimestamp: string;
+  avatarColor?: string;
+}
+
+export interface KickidlerViolation {
+  id: string;
+  empId: string;
+  empName: string;
+  empCode: string;
+  unit: string;
+  timestamp: string;
+  type: 'unproductive_site' | 'prolonged_idle' | 'late_arrival' | 'early_departure' | 'unauthorized_program';
+  title: string;
+  description: string;
+  durationMinutes?: number;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  status: 'new' | 'acknowledged' | 'addressed';
+}
+

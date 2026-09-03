@@ -16,6 +16,9 @@ import Onboarding from './components/Onboarding';
 import MyEvaluation from './components/MyEvaluation';
 import ManagementCenter from './components/ManagementCenter';
 import WorkflowManager from './components/WorkflowManager';
+import SupervisorNotificationBell from './components/SupervisorNotificationBell';
+import LatticePerformanceHub from './components/LatticePerformanceHub';
+import KickidlerProductivityHub from './components/KickidlerProductivityHub';
 import {
    Home,
    BookOpen,
@@ -233,6 +236,8 @@ function MainApp() {
       if (savedEmp) setEmployees(sanitizeEmployees(JSON.parse(savedEmp)));
       const savedEval = localStorage.getItem('pe_evaluations');
       if (savedEval) setEvaluations(JSON.parse(savedEval));
+      const savedArchived = localStorage.getItem('pe_archived_evaluations');
+      if (savedArchived) setArchivedEvaluations(JSON.parse(savedArchived));
 
       // Invalidate admin session if password updated in another tab
       if (currentUser?.role === 'admin') {
@@ -381,6 +386,11 @@ function MainApp() {
     return saved ? JSON.parse(saved) : SEED_EVALUATIONS;
   });
 
+  const [archivedEvaluations, setArchivedEvaluations] = useState<Evaluation[]>(() => {
+    const saved = localStorage.getItem('pe_archived_evaluations');
+    return saved ? JSON.parse(saved) : [];
+  });
+
   const notifyDataSaved = useCallback(() => {
     setSaveIndicator(true);
     const t = setTimeout(() => setSaveIndicator(false), 2000);
@@ -406,6 +416,11 @@ function MainApp() {
     localStorage.setItem('pe_evaluations', JSON.stringify(evaluations));
     notifyDataSaved();
   }, [evaluations, notifyDataSaved]);
+
+  useEffect(() => {
+    localStorage.setItem('pe_archived_evaluations', JSON.stringify(archivedEvaluations));
+    notifyDataSaved();
+  }, [archivedEvaluations, notifyDataSaved]);
 
   // Check and alert pending tasks if user is logged in
   useEffect(() => {
@@ -778,6 +793,8 @@ function MainApp() {
       case 'evaluations': return 'فرم‌های ارزیابی';
       case 'calibration': return 'کالیبراسیون عملکرد';
       case 'reports': return 'گزارشات سازمانی';
+      case 'lattice-hub': return 'مدیریت اهداف و استعدادها (Lattice)';
+      case 'kickidler-hub': return 'پایش بهره‌وری و زمان کار (Kickidler)';
       case 'onboarding': return 'آموزش سیستم';
       case 'my-evaluation': return 'ارزیابی من';
       case 'settings': return 'تنظیمات امنیتی';
@@ -805,6 +822,13 @@ function MainApp() {
               <CheckCircle2 className="w-3 h-3" /> ذخیره شد
             </span>
           )}
+          <SupervisorNotificationBell
+            evaluations={evaluations}
+            employees={employees}
+            currentUser={currentUser}
+            onNavigate={setCurrentTab}
+            theme={theme}
+          />
           <button type="button" onClick={handleToggleTheme} className="p-1.5 rounded-xl bg-slate-800/20 text-slate-400 hover:text-slate-200 cursor-pointer">
             {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-indigo-600" />}
           </button>
@@ -819,16 +843,77 @@ function MainApp() {
         onStartTour={handleStartTour} isMobileOpen={isMobileMenuOpen} onCloseMobile={() => setIsMobileMenuOpen(false)} 
       />
 
-      <main className={`flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 transition-colors duration-300 ${theme === 'dark' ? 'bg-slate-950/60 backdrop-blur-3xl' : 'bg-slate-100/40'}`}>
-        <div className="max-w-7xl mx-auto space-y-6">
+      <main className={`flex-1 overflow-y-auto transition-colors duration-300 ${theme === 'dark' ? 'bg-slate-950/60 backdrop-blur-3xl' : 'bg-slate-100/40'}`}>
+        {/* Desktop Sticky Header with Supervisor Overdue Notification Bell */}
+        <div className={`hidden md:flex items-center justify-between px-6 py-2.5 border-b sticky top-0 z-20 backdrop-blur-md ${
+          theme === 'dark' ? 'bg-slate-950/85 border-slate-800/80' : 'bg-white/85 border-slate-200/80 shadow-xs'
+        }`}>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-black tracking-tight">{getTabTitle(currentTab)}</span>
+            <span className="text-[11px] text-slate-500 font-medium">| سامانه جامع مدیریت عملکرد و ارزیابی شایستگی‌های شغلی</span>
+          </div>
+          <div className="flex items-center gap-3">
+            {saveIndicator && (
+              <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-2.5 py-1 rounded-full animate-fade-in border border-emerald-500/20">
+                <CheckCircle2 className="w-3 h-3" /> ذخیره خودکار فعال
+              </span>
+            )}
+            <SupervisorNotificationBell
+              evaluations={evaluations}
+              employees={employees}
+              currentUser={currentUser}
+              onNavigate={setCurrentTab}
+              theme={theme}
+            />
+            <button
+              type="button"
+              onClick={handleToggleTheme}
+              className="p-1.5 rounded-xl bg-slate-800/20 text-slate-400 hover:text-slate-200 cursor-pointer transition-colors"
+              title="تغییر تم"
+            >
+              {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-indigo-600" />}
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4 sm:p-6 md:p-8">
+          <div className="max-w-7xl mx-auto space-y-6">
           {currentTab === 'dashboard' && <Dashboard criteria={criteria} profiles={profiles} employees={employees} evaluations={evaluations} onNavigate={setCurrentTab} onSelectEvaluation={handleSelectEvaluation} currentUser={currentUser} hasCertifiedBadge={hasCertifiedBadge} />}
           {currentTab === 'workflow' && <WorkflowManager currentUser={currentUser} evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} theme={theme} />}
-          {currentTab === 'criteria' && <CriteriaBank criteria={criteria} onAddCriterion={handleAddCriterion} onUpdateCriterion={handleUpdateCriterion} onDeleteCriterion={handleDeleteCriterion} theme={theme} />}
+          {currentTab === 'criteria' && (
+            <CriteriaBank 
+              criteria={criteria} 
+              onAddCriterion={handleAddCriterion} 
+              onUpdateCriterion={handleUpdateCriterion} 
+              onDeleteCriterion={handleDeleteCriterion} 
+              employees={employees}
+              profiles={profiles}
+              evaluations={evaluations}
+              onUpdateEvaluations={setEvaluations}
+              theme={theme} 
+            />
+          )}
           {currentTab === 'profiles' && <JobProfiles profiles={profiles} criteria={criteria} onAddProfile={handleAddProfile} onUpdateProfile={handleUpdateProfile} onDeleteProfile={handleDeleteProfile} onToggleLockProfile={handleToggleLockProfile} onAddCriterion={handleAddCriterion} theme={theme} />}
           {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onDeleteEmployee={handleDeleteEmployee} onStartEvaluation={handleStartEvaluationDirect} theme={theme} />}
           {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onDeleteEvaluation={handleDeleteEvaluation} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} currentUser={currentUser} />}
           {currentTab === 'calibration' && <Calibration evaluations={evaluations} employees={employees} profiles={profiles} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} />}
           {currentTab === 'reports' && <Reports evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} />}
+          {currentTab === 'lattice-hub' && (
+            <LatticePerformanceHub 
+              currentUser={currentUser} 
+              employees={employees} 
+              theme={theme} 
+              onNavigate={setCurrentTab} 
+            />
+          )}
+          {currentTab === 'kickidler-hub' && (
+            <KickidlerProductivityHub 
+              currentUser={currentUser} 
+              employees={employees} 
+              theme={theme} 
+              onNavigate={setCurrentTab} 
+            />
+          )}
           {currentTab === 'onboarding' && <Onboarding currentUser={currentUser} onComplete={() => { if (currentUser) localStorage.setItem('pe_onboarded_' + currentUser.id, 'true'); if (currentUser && currentUser.role === 'employee') setCurrentTab('my-evaluation'); else setCurrentTab('dashboard'); }} hasCertifiedBadge={hasCertifiedBadge} onGrantBadge={() => setHasCertifiedBadge(true)} theme={theme} />}
           {currentTab === 'my-evaluation' && <MyEvaluation currentUser={currentUser} evaluations={evaluations} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onAddEvaluation={handleAddEvaluation} theme={theme} />}
           {currentTab === 'settings' && (
@@ -838,10 +923,12 @@ function MainApp() {
                 profiles={profiles} 
                 criteria={criteria} 
                 evaluations={evaluations} 
+                archivedEvaluations={archivedEvaluations}
                 onSetEmployees={setEmployees} 
                 onSetProfiles={setProfiles} 
                 onSetCriteria={setCriteria} 
                 onSetEvaluations={setEvaluations} 
+                onSetArchivedEvaluations={setArchivedEvaluations}
                 currentUser={currentUser} 
                 theme={theme} 
                 onForceReauth={handleForceAdminReauth}
@@ -865,6 +952,7 @@ function MainApp() {
               </div>
             )
           )}
+          </div>
         </div>
       </main>
 

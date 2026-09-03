@@ -24,6 +24,7 @@ import {
 import { Criterion, JobProfile, Employee, Evaluation, CYCLE_STEPS, getGrade, GRADE_DETAILS } from '../types';
 import SmartGrowthAnalytics from './SmartGrowthAnalytics';
 import RadarChartD3, { CompetencyDimensionData } from './RadarChartD3';
+import SupervisorNotificationBell from './SupervisorNotificationBell';
 
 interface DashboardProps {
   criteria: Criterion[];
@@ -226,9 +227,18 @@ export default function Dashboard({
           <h1 className="text-2xl font-black text-slate-100 tracking-tight">داشبورد ارزیابی عملکرد</h1>
           <p className="text-sm text-slate-400 mt-1">نمای مدیریتی یکپارچه عملکرد، شایستگی‌ها و مربیگری هوشمند سازمان</p>
         </div>
-        <div className="text-[10px] font-bold text-teal-400 bg-teal-500/10 border border-teal-500/20 px-3 py-1.5 rounded-full flex items-center gap-1.5">
-          <span>واحد ارزیابی عملکرد اصفهان چالاک</span>
-          <span className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse" />
+        <div className="flex items-center gap-3">
+          <SupervisorNotificationBell
+            evaluations={evaluations}
+            employees={employees}
+            currentUser={currentUser}
+            onNavigate={onNavigate}
+            theme="dark"
+          />
+          <div className="text-[10px] font-bold text-teal-400 bg-teal-500/10 border border-teal-500/20 px-3 py-1.5 rounded-full flex items-center gap-1.5">
+            <span>واحد ارزیابی عملکرد اصفهان چالاک</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse" />
+          </div>
         </div>
       </div>
 

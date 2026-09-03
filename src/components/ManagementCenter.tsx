@@ -61,10 +61,15 @@ import {
   CheckCircle,
   XCircle,
   AlertTriangle,
-  Info
+  Info,
+  History,
+  Gauge
 } from 'lucide-react';
 import { Employee, JobProfile, Criterion, Evaluation, UserRole, UserCustomPermission, CategoryKey } from '../types';
 import ExcelIntegrationCenter from './ExcelIntegrationCenter';
+import PerformanceArchiveVault from './PerformanceArchiveVault';
+import ProductionCycleTimeCalculator from './ProductionCycleTimeCalculator';
+import { getArchivedEvaluations, saveArchivedEvaluations } from '../utils/archiveManager';
 
 export interface SystemLog {
   id: string;
@@ -80,10 +85,12 @@ interface ManagementCenterProps {
   profiles: JobProfile[];
   criteria: Criterion[];
   evaluations: Evaluation[];
+  archivedEvaluations?: Evaluation[];
   onSetEmployees: (emps: Employee[]) => void;
   onSetProfiles: (profs: JobProfile[]) => void;
   onSetCriteria: (crits: Criterion[]) => void;
   onSetEvaluations: (evals: Evaluation[]) => void;
+  onSetArchivedEvaluations?: (archived: Evaluation[]) => void;
   currentUser: Employee;
   theme: 'dark' | 'light';
   onForceReauth?: () => void;
@@ -94,16 +101,33 @@ export default function ManagementCenter({
   profiles,
   criteria,
   evaluations,
+  archivedEvaluations,
   onSetEmployees,
   onSetProfiles,
   onSetCriteria,
   onSetEvaluations,
+  onSetArchivedEvaluations,
   currentUser,
   theme,
   onForceReauth
 }: ManagementCenterProps) {
   // Navigation Tab inside Management Center
-  const [activeSectionTab, setActiveSectionTab] = useState<'security' | 'rbac' | 'backup' | 'logs' | 'all'>('security');
+  const [activeSectionTab, setActiveSectionTab] = useState<'security' | 'rbac' | 'backup' | 'history' | 'logs' | 'all'>('security');
+
+  // Internal fallback state for archived evaluations if not passed directly
+  const [internalArchivedEvaluations, setInternalArchivedEvaluations] = useState<Evaluation[]>(() => {
+    return archivedEvaluations || getArchivedEvaluations();
+  });
+
+  const effectiveArchived = archivedEvaluations || internalArchivedEvaluations;
+  const handleSetArchived = (nextArchived: Evaluation[]) => {
+    setInternalArchivedEvaluations(nextArchived);
+    if (onSetArchivedEvaluations) {
+      onSetArchivedEvaluations(nextArchived);
+    } else {
+      saveArchivedEvaluations(nextArchived);
+    }
+  };
 
   // Excel Integration Modal State
   const [isExcelIntegrationOpen, setIsExcelIntegrationOpen] = useState(false);
@@ -275,7 +299,7 @@ export default function ManagementCenter({
     stats?: { count: number; updated: number; created: number };
   } | null>(null);
   const [isProcessingImport, setIsProcessingImport] = useState(false);
-  const [dataHubActiveView, setDataHubActiveView] = useState<'hub' | 'import' | 'export' | 'tools'>('hub');
+  const [dataHubActiveView, setDataHubActiveView] = useState<'hub' | 'import' | 'export' | 'tools' | 'calc'>('hub');
   const [logFilter, setLogFilter] = useState<'all' | 'info' | 'warning' | 'success' | 'danger'>('all');
 
   const [logs, setLogs] = useState<SystemLog[]>(() => {
@@ -1503,7 +1527,21 @@ export default function ManagementCenter({
           }`}
         >
           <Database className="w-4 h-4" />
-          <span>پشتیبان‌گیری، خروجی اکسل و HTML</span>
+          <span>پشتیبان‌گیری، خروجی اکسل و داده‌ها</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSectionTab('history')}
+          className={`py-2.5 px-4 rounded-2xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
+            activeSectionTab === 'history'
+              ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/20'
+              : 'bg-slate-900/50 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
+          }`}
+        >
+          <History className="w-4 h-4" />
+          <span>تاریخچه عملکرد و آرشیو دوره‌ها</span>
+          <span className="text-[10px] bg-black/20 px-2 py-0.5 rounded-full font-mono">{effectiveArchived.length}</span>
         </button>
 
         <button
@@ -2565,6 +2603,19 @@ export default function ManagementCenter({
               <Zap className="w-3.5 h-3.5" />
               <span>داده‌های استاندارد کارخانه و تست مقیاس (Data Sandbox)</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setDataHubActiveView('calc')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shrink-0 ${
+                dataHubActiveView === 'calc'
+                  ? 'bg-emerald-500 text-slate-950 font-black shadow-md shadow-emerald-500/20'
+                  : 'bg-slate-900/60 text-slate-400 hover:text-slate-200 border border-slate-800'
+              }`}
+            >
+              <Gauge className="w-3.5 h-3.5 text-emerald-400" />
+              <span>ورود آسان و محاسبات خودکار تولید و سایکل‌تایم</span>
+            </button>
           </div>
 
           {/* 3. FEEDBACK NOTIFICATION BANNER */}
@@ -3021,7 +3072,40 @@ export default function ManagementCenter({
             </div>
           )}
 
+          {/* VIEW D: PRODUCTION & CYCLE TIME ENGINE */}
+          {dataHubActiveView === 'calc' && (
+            <ProductionCycleTimeCalculator
+              employees={employees}
+              criteria={criteria}
+              profiles={profiles}
+              evaluations={evaluations}
+              onUpdateEvaluations={(nextEvals) => {
+                onSetEvaluations(nextEvals);
+                addLog('ثبت محاسبات خودکار تولید و سایکل‌تایم', 'محاسبه لحظه‌ای شاخص‌های تولید و درج مستقیم در کارنامه ارزیابی پرسنل', 'success');
+              }}
+              currentUser={currentUser}
+            />
+          )}
+
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* SECTION: PERFORMANCE HISTORY & COLD STORAGE ARCHIVE VAULT                 */}
+      {/* ========================================================================= */}
+      {(activeSectionTab === 'history' || activeSectionTab === 'all') && (
+        <PerformanceArchiveVault
+          activeEvaluations={evaluations}
+          archivedEvaluations={effectiveArchived}
+          onSetEvaluations={onSetEvaluations}
+          onSetArchivedEvaluations={handleSetArchived}
+          employees={employees}
+          profiles={profiles}
+          criteria={criteria}
+          currentUser={currentUser}
+          theme={theme}
+          onAddLog={addLog}
+        />
       )}
 
       {/* ========================================================================= */}

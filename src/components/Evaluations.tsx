@@ -29,10 +29,12 @@ import {
   MessageSquareQuote,
   Check,
   Table as TableIcon,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Calculator
 } from 'lucide-react';
 import ExcelIntegrationCenter from './ExcelIntegrationCenter';
 import AIFeedbackAssistant from './AIFeedbackAssistant';
+import { calculateKpiScore } from '../utils/formulaEngine';
 import { 
   Evaluation, 
   Employee, 
@@ -142,10 +144,46 @@ export default function Evaluations({
   // Excel Integration State
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
+  // Quick KPI Data Calculator modal for individual criteria inside evaluation
+  const [quickCalcState, setQuickCalcState] = useState<{ scoreIndex: number; criterion: Criterion } | null>(null);
+  const [quickCalcInputs, setQuickCalcInputs] = useState<Record<string, number>>({});
+
   // Active evaluation form states
   const activeEval = evaluations.find(e => e.id === activeEvalId);
   const activeEmployee = employees.find(emp => emp?.id === activeEval?.empId);
   const activeProfile = profiles.find(p => p?.id === activeEval?.profileId);
+
+  const handleOpenQuickCalc = (scoreIndex: number, criterion: Criterion) => {
+    const initial: Record<string, number> = {};
+    if (criterion.variables && criterion.variables.length > 0) {
+      criterion.variables.forEach(v => {
+        initial[v.key] = v.defaultValue ?? 100;
+      });
+    } else {
+      initial['actual'] = 95;
+      initial['target'] = criterion.targetValue || 100;
+      initial['standard'] = 60;
+      initial['scrap'] = 2;
+      initial['total'] = 100;
+    }
+    setQuickCalcInputs(initial);
+    setQuickCalcState({ scoreIndex, criterion });
+  };
+
+  const handleApplyQuickCalc = () => {
+    if (!quickCalcState || !activeEval) return;
+    const { scoreIndex, criterion } = quickCalcState;
+    const result = calculateKpiScore(criterion, quickCalcInputs);
+    
+    const updatedScores = [...activeEval.scores];
+    updatedScores[scoreIndex] = {
+      ...updatedScores[scoreIndex],
+      value: result.score,
+      doc: `${updatedScores[scoreIndex].doc ? updatedScores[scoreIndex].doc + ' | ' : ''}${result.summaryText}`
+    };
+    onUpdateEvaluation(activeEval.id, { ...activeEval, scores: updatedScores });
+    setQuickCalcState(null);
+  };
 
   // Triggering the add modal
   const handleOpenNewModal = () => {
@@ -680,7 +718,19 @@ export default function Evaluations({
                     {/* Interactive Supervisor Rating Slider/Selector */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
                       <div className="space-y-1.5">
-                        <label className="block text-[10px] text-slate-400 font-semibold">ارزیابی نهایی سرپرست خط (۱ تا ۵):</label>
+                        <div className="flex items-center justify-between">
+                          <label className="block text-[10px] text-slate-400 font-semibold">ارزیابی نهایی سرپرست خط (۱ تا ۵):</label>
+                          <button
+                            type="button"
+                            disabled={activeEval.status === 'locked'}
+                            onClick={() => handleOpenQuickCalc(idx, crit)}
+                            className="text-[10px] text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1 bg-teal-500/10 hover:bg-teal-500/20 px-2 py-0.5 rounded-lg border border-teal-500/20 cursor-pointer transition-all"
+                            title="ورود داده‌های عملکردی مانند تولید، سایکل‌تایم، ضایعات و محاسبه خودکار نمره با فرمول"
+                          >
+                            <Calculator className="w-3 h-3 text-teal-400" />
+                            <span>محاسبه با فرمول داده‌ها</span>
+                          </button>
+                        </div>
                         <div className="flex gap-1">
                           {[1, 2, 3, 4, 5].map((val) => {
                             const isSelected = score.value === val;
@@ -1191,6 +1241,123 @@ export default function Evaluations({
         }}
         onAddEvaluation={onAddEvaluation}
       />
+
+      {/* 7. QUICK KPI DATA CALCULATOR MODAL */}
+      {quickCalcState && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in" dir="rtl">
+          <div className="relative w-full max-w-lg rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-500/20 text-teal-400 flex items-center justify-center">
+                  <Calculator className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-black text-slate-100">
+                    محاسبه خودکار نمره: {quickCalcState.criterion.name}
+                  </h3>
+                  <span className="text-[10px] font-mono text-teal-400">
+                    {quickCalcState.criterion.code} • فرمول: {quickCalcState.criterion.formulaExpression || '(actual / target) * 100'}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuickCalcState(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Input Variables */}
+            <div className="space-y-3">
+              {(quickCalcState.criterion.variables && quickCalcState.criterion.variables.length > 0) ? (
+                quickCalcState.criterion.variables.map(v => (
+                  <div key={v.key} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                    <div>
+                      <span className="text-xs font-bold text-slate-300">{v.label}</span>
+                      <span className="text-[10px] font-mono text-slate-500 block">{v.key}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        value={quickCalcInputs[v.key] ?? v.defaultValue ?? 0}
+                        onChange={(e) => setQuickCalcInputs({ ...quickCalcInputs, [v.key]: Number(e.target.value) })}
+                        className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs font-mono font-bold text-left focus:outline-none focus:border-teal-500"
+                        dir="ltr"
+                      />
+                      <span className="text-[10px] text-slate-400 w-10">{v.unit}</span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <>
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-xs font-bold text-slate-300">عملکرد / تولید واقعی (Actual)</span>
+                    <input
+                      type="number"
+                      value={quickCalcInputs['actual'] ?? 95}
+                      onChange={(e) => setQuickCalcInputs({ ...quickCalcInputs, actual: Number(e.target.value) })}
+                      className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs font-mono font-bold text-left"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-xs font-bold text-slate-300">تارگت / برنامه مصوب (Target)</span>
+                    <input
+                      type="number"
+                      value={quickCalcInputs['target'] ?? 100}
+                      onChange={(e) => setQuickCalcInputs({ ...quickCalcInputs, target: Number(e.target.value) })}
+                      className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs font-mono font-bold text-left"
+                      dir="ltr"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Live Calculation Preview */}
+            {(() => {
+              const res = calculateKpiScore(quickCalcState.criterion, quickCalcInputs);
+              return (
+                <div className="p-3.5 rounded-2xl bg-slate-950 border border-teal-500/30 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">مقدار محاسبه شده:</span>
+                    <span className="text-sm font-black font-mono text-teal-400">
+                      {res.computedValue} {quickCalcState.criterion.unit || '%'}
+                    </span>
+                    <p className="text-[9px] text-slate-500 mt-0.5">{res.statusLabel}</p>
+                  </div>
+                  <div className="text-left">
+                    <span className="text-[10px] text-slate-400 block">نمره کارنامه (۱ تا ۵):</span>
+                    <span className="text-2xl font-black font-mono text-emerald-400 px-3 py-0.5 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                      {res.score}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Actions */}
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setQuickCalcState(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyQuickCalc}
+                className="flex-1 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-black cursor-pointer shadow-lg shadow-teal-500/20"
+              >
+                اعمال مستقیم در کارنامه
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -32,7 +32,8 @@ import {
   Eye,
   Settings2,
   Save,
-  RotateCcw
+  RotateCcw,
+  Gauge
 } from 'lucide-react';
 import {
   Employee,
@@ -44,6 +45,7 @@ import {
   DynamicColumnMapping,
   DynamicExcelRowRecord
 } from '../types';
+import ProductionCycleTimeCalculator from './ProductionCycleTimeCalculator';
 import {
   downloadKasraExcelTemplate,
   downloadMISExcelTemplate,
@@ -79,7 +81,7 @@ export default function ExcelIntegrationCenter({
   onAddEvaluation,
   currentUser
 }: ExcelIntegrationCenterProps) {
-  const [activeTab, setActiveTab] = useState<'dynamic' | 'kasra' | 'mis' | 'builder'>('dynamic');
+  const [activeTab, setActiveTab] = useState<'dynamic' | 'kasra' | 'mis' | 'production_calc' | 'builder'>('dynamic');
   const [isProcessing, setIsProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -670,6 +672,18 @@ export default function ExcelIntegrationCenter({
             >
               <Database className="w-4 h-4" />
               <span>سامانه MIS (تولید و کیفیت)</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('production_calc')}
+              className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'production_calc'
+                  ? 'bg-emerald-500 text-slate-950 font-black shadow-md shadow-emerald-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+              }`}
+            >
+              <Gauge className="w-4 h-4" />
+              <span>محاسبه‌گر تولید و سایکل‌تایم</span>
             </button>
           </div>
 
@@ -1475,6 +1489,24 @@ export default function ExcelIntegrationCenter({
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* TAB 5: PRODUCTION & CYCLE TIME ENGINE */}
+          {activeTab === 'production_calc' && (
+            <div className="p-2">
+              <ProductionCycleTimeCalculator
+                employees={employees}
+                criteria={criteria}
+                profiles={profiles}
+                evaluations={evaluations}
+                onUpdateEvaluations={(nextEvals) => {
+                  onUpdateEvaluations(nextEvals);
+                  setSuccessMessage('محاسبات خودکار تولید و سایکل‌تایم با موفقیت انجام و در کارنامه‌ها ثبت شد.');
+                }}
+                currentUser={currentUser}
+                onClose={onClose}
+              />
             </div>
           )}
 

@@ -1,6 +1,6 @@
 {
   "name": "Performance Evaluation & AI Coaching System",
-  "description": "سامانه ارزیابی عملکرد، کالیبراسیون، تحلیل هوشمند شایستگی پرسنل و مرکز جامع تبادل و مهاجرت کلان داده‌ها (Import/Export/Backup)",
+  "description": "سامانه جامع ارزیابی عملکرد و پایش بهره‌وری سازمانی، اهداف OKR، جلسات ۱به۱، بازخورد و تمجید (Lattice) و پایش زنده کارکرد و زمان پرسنل (Kickidler)",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

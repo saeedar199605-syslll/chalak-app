@@ -94,7 +94,7 @@ export function validateEmployeeInput(data: unknown): ValidationResult<Omit<Empl
 // 2. CRITERION SCHEMA & VALIDATION
 // ==========================================
 export const CriterionInputSchema = z.object({
-  code: z.string().min(2, 'کد شاخص الزامی است.').max(30, 'کد شاخص نامعتبر است.'),
+  code: z.string().min(2, 'کد شاخص الزامی است.').max(40, 'کد شاخص نامعتبر است.'),
   cat: z.enum(['K', 'Q', 'B', 'S', 'L'] as const, {
     message: 'دسته‌بندی شاخص نامعتبر است.'
   }),
@@ -102,13 +102,29 @@ export const CriterionInputSchema = z.object({
   def: z.string().min(3, 'تعریف عملیاتی و سنجه باید حداقل ۳ کاراکتر باشد.').max(1000, 'تعریف بیش از حد طولانی است.'),
   source: z.string().max(200).optional(),
   method: z.string().max(200).optional(),
-  dir: z.enum(['more', 'less'] as const).optional()
+  dir: z.enum(['more', 'less'] as const).optional(),
+  calculationType: z.enum(['ratio', 'inverse_ratio', 'defect_rate', 'custom_formula', 'direct_score'] as const).optional(),
+  formulaExpression: z.string().max(500).optional(),
+  variables: z.array(z.object({
+    key: z.string().min(1),
+    label: z.string().min(1),
+    unit: z.string().optional(),
+    defaultValue: z.number().optional()
+  })).optional(),
+  unit: z.string().max(50).optional(),
+  targetValue: z.number().optional(),
+  scoreThresholds: z.object({
+    score5: z.number(),
+    score4: z.number(),
+    score3: z.number(),
+    score2: z.number()
+  }).optional()
 }).refine(data => {
   const codeClean = data.code.trim().toUpperCase();
   const prefix = codeClean.split('-')[0];
-  return prefix === data.cat || codeClean.startsWith(data.cat);
+  return prefix === data.cat || codeClean.startsWith(data.cat) || codeClean.startsWith('KPI-') || codeClean.startsWith('C-');
 }, {
-  message: 'کد شاخص باید با پیشوند دسته انتخابی (مانند K- یا B-) آغاز شود.',
+  message: 'کد شاخص باید با پیشوند دسته انتخابی (مانند K- یا B- یا KPI-) آغاز شود.',
   path: ['code']
 });
 
@@ -121,7 +137,23 @@ export function sanitizeCriterionData(data: any): any {
     def: sanitizeInputString(data.def),
     source: data.source ? sanitizeInputString(data.source) : undefined,
     method: data.method ? sanitizeInputString(data.method) : undefined,
-    dir: data.dir || undefined
+    dir: data.dir || undefined,
+    calculationType: data.calculationType || undefined,
+    formulaExpression: data.formulaExpression ? sanitizeInputString(data.formulaExpression) : undefined,
+    unit: data.unit ? sanitizeInputString(data.unit) : undefined,
+    targetValue: typeof data.targetValue === 'number' ? data.targetValue : (data.targetValue ? Number(data.targetValue) : undefined),
+    variables: Array.isArray(data.variables) ? data.variables.map((v: any) => ({
+      key: sanitizeInputString(v.key),
+      label: sanitizeInputString(v.label),
+      unit: v.unit ? sanitizeInputString(v.unit) : undefined,
+      defaultValue: typeof v.defaultValue === 'number' ? v.defaultValue : undefined
+    })) : undefined,
+    scoreThresholds: data.scoreThresholds ? {
+      score5: Number(data.scoreThresholds.score5) || 105,
+      score4: Number(data.scoreThresholds.score4) || 95,
+      score3: Number(data.scoreThresholds.score3) || 85,
+      score2: Number(data.scoreThresholds.score2) || 70,
+    } : undefined
   };
 }
 
