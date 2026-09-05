@@ -19,6 +19,7 @@ import WorkflowManager from './components/WorkflowManager';
 import SupervisorNotificationBell from './components/SupervisorNotificationBell';
 import LatticePerformanceHub from './components/LatticePerformanceHub';
 import KickidlerProductivityHub from './components/KickidlerProductivityHub';
+import ComprehensiveManualModal from './components/ComprehensiveManualModal';
 import {
    Home,
    BookOpen,
@@ -163,6 +164,7 @@ function MainApp() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [saveIndicator, setSaveIndicator] = useState(false);
   const [activeTourStep, setActiveTourStep] = useState<number | null>(null);
+  const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   
   const sanitizeUser = (user: Employee | null): Employee | null => {
     if (!user) return null;
@@ -353,7 +355,12 @@ function MainApp() {
   });
 
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    return (localStorage.getItem('pe_theme') as 'dark' | 'light') || 'light';
+    const saved = localStorage.getItem('pe_theme');
+    if (!saved) {
+      localStorage.setItem('pe_theme', 'light');
+      return 'light';
+    }
+    return (saved as 'dark' | 'light') || 'light';
   });
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; visible: boolean } | null>(null);
@@ -736,8 +743,38 @@ function MainApp() {
   };
 
   const handleDeleteEmployee = (id: string) => {
-    setEmployees(employees.filter(e => e.id !== id));
-    setEvaluations(evaluations.filter(ev => ev.empId !== id));
+    const target = employees.find(e => e.id === id);
+    if (!target) return;
+    // Protect admin account strictly
+    if (target.role === 'admin' || target.username === 'admin' || target.code === 'ADMIN-001') {
+      return;
+    }
+    const updatedEmployees = employees.filter(e => e.id !== id);
+    const updatedEvaluations = evaluations.filter(ev => ev.empId !== id);
+    setEmployees(updatedEmployees);
+    setEvaluations(updatedEvaluations);
+    localStorage.setItem('pe_employees', JSON.stringify(updatedEmployees));
+    localStorage.setItem('pe_evaluations', JSON.stringify(updatedEvaluations));
+
+    // Clear credential records if any
+    try {
+      const pKey = target.username.toLowerCase();
+      const pwMap = JSON.parse(localStorage.getItem('pe_user_passwords') || '{}');
+      if (pwMap[pKey]) {
+        delete pwMap[pKey];
+        localStorage.setItem('pe_user_passwords', JSON.stringify(pwMap));
+      }
+    } catch (e) {}
+
+    // Immediate sync to server
+    fetch('/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pe_employees: updatedEmployees,
+        pe_evaluations: updatedEvaluations
+      })
+    }).catch(console.error);
   };
 
   const handleAddEvaluation = (empId: string, period: string) => {
@@ -822,6 +859,14 @@ function MainApp() {
               <CheckCircle2 className="w-3 h-3" /> ذخیره شد
             </span>
           )}
+          <button 
+            type="button" 
+            onClick={() => setIsManualModalOpen(true)} 
+            className="p-1.5 rounded-xl bg-teal-500/10 text-teal-400 hover:bg-teal-500/20 transition-colors cursor-pointer"
+            title="کتابچه راهنما و دانلود PDF"
+          >
+            <BookOpen className="w-4 h-4" />
+          </button>
           <SupervisorNotificationBell
             evaluations={evaluations}
             employees={employees}
@@ -840,7 +885,9 @@ function MainApp() {
         onChangeTab={(tab) => { setCurrentTab(tab); if (tab !== 'evaluations') setActiveEvalId(null); }} 
         currentUser={currentUser} onLogout={handleLogout} theme={theme} onToggleTheme={handleToggleTheme} 
         hasCertifiedBadge={hasCertifiedBadge} employees={employees} onSwitchUser={handleSwitchUser} 
-        onStartTour={handleStartTour} isMobileOpen={isMobileMenuOpen} onCloseMobile={() => setIsMobileMenuOpen(false)} 
+        onStartTour={handleStartTour}
+        onOpenManual={() => setIsManualModalOpen(true)}
+        isMobileOpen={isMobileMenuOpen} onCloseMobile={() => setIsMobileMenuOpen(false)} 
       />
 
       <main className={`flex-1 overflow-y-auto transition-colors duration-300 ${theme === 'dark' ? 'bg-slate-950/60 backdrop-blur-3xl' : 'bg-slate-100/40'}`}>
@@ -858,6 +905,15 @@ function MainApp() {
                 <CheckCircle2 className="w-3 h-3" /> ذخیره خودکار فعال
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setIsManualModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 border border-teal-500/20 text-xs font-bold transition-all cursor-pointer"
+              title="مشاهده و دانلود کتابچه راهنمای جامع به صورت PDF"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>کتابچه راهنما (PDF)</span>
+            </button>
             <SupervisorNotificationBell
               evaluations={evaluations}
               employees={employees}
@@ -878,7 +934,7 @@ function MainApp() {
 
         <div className="p-4 sm:p-6 md:p-8">
           <div className="max-w-7xl mx-auto space-y-6">
-          {currentTab === 'dashboard' && <Dashboard criteria={criteria} profiles={profiles} employees={employees} evaluations={evaluations} onNavigate={setCurrentTab} onSelectEvaluation={handleSelectEvaluation} currentUser={currentUser} hasCertifiedBadge={hasCertifiedBadge} />}
+          {currentTab === 'dashboard' && <Dashboard criteria={criteria} profiles={profiles} employees={employees} evaluations={evaluations} onNavigate={setCurrentTab} onSelectEvaluation={handleSelectEvaluation} currentUser={currentUser} hasCertifiedBadge={hasCertifiedBadge} theme={theme} />}
           {currentTab === 'workflow' && <WorkflowManager currentUser={currentUser} evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} theme={theme} />}
           {currentTab === 'criteria' && (
             <CriteriaBank 
@@ -991,6 +1047,10 @@ function MainApp() {
               <div className="flex items-center gap-2"><Download className="w-3.5 h-3.5" /><span>بکاپ سریع (JSON)</span></div>
               <span className="text-[10px] text-indigo-400 font-mono">Backup</span>
             </button>
+            <button type="button" onClick={() => { setContextMenu(null); setIsManualModalOpen(true); }} className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-teal-500/10 hover:text-teal-400 transition-all cursor-pointer text-teal-400">
+              <div className="flex items-center gap-2"><BookOpen className="w-3.5 h-3.5" /><span>کتابچه راهنمای جامع (PDF)</span></div>
+              <span className="text-[10px] text-teal-400 font-mono">Manual</span>
+            </button>
             <button type="button" onClick={() => { setContextMenu(null); window.print(); }} className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-teal-500/10 hover:text-teal-400 transition-all cursor-pointer">
               <div className="flex items-center gap-2"><Printer className="w-3.5 h-3.5" /><span>پرینت / PDF گزارش</span></div>
               <span className="text-[10px] text-slate-500 font-mono">Ctrl+P</span>
@@ -1014,7 +1074,7 @@ function MainApp() {
         </div>
       )}
       
-      {activeTourStep !== null && currentTourSteps[activeTourStep] && (
+       {activeTourStep !== null && currentTourSteps[activeTourStep] && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-[999] p-4 font-sans text-right" dir="rtl">
            <div className="bg-slate-900 border border-teal-500/40 p-6 rounded-3xl max-w-md w-full space-y-4 shadow-2xl animate-in zoom-in-95 duration-200">
              <div className="flex justify-between items-center border-b border-slate-800 pb-3">
@@ -1040,6 +1100,13 @@ function MainApp() {
            </div>
         </div>
       )}
+
+      {/* Comprehensive System Manual & Printable PDF Guide Modal */}
+      <ComprehensiveManualModal
+        isOpen={isManualModalOpen}
+        onClose={() => setIsManualModalOpen(false)}
+        theme={theme}
+      />
     </div>
   );
 }

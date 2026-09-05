@@ -22,7 +22,9 @@ import {
   Zap,
   Layers,
   FileSpreadsheet,
-  Download
+  Download,
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react';
 import { Employee, JobProfile, UserRole } from '../types';
 import { VirtualizedTable } from './VirtualizedTable';
@@ -77,13 +79,19 @@ export default function Employees({
   onUpdateEmployee,
   onDeleteEmployee,
   onStartEvaluation,
-  theme = 'dark'
+  theme = 'light'
 }: EmployeesProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
+  const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(null);
+  const [deleteToast, setDeleteToast] = useState<string | null>(null);
+
+  const isAdminUser = (emp: Employee) => {
+    return emp.role === 'admin' || emp.username === 'admin' || emp.code === 'ADMIN-001';
+  };
 
   // Bulk Import State (Legacy quick modal)
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -632,17 +640,23 @@ export default function Employees({
                   >
                     <Edit3 className="w-3.5 h-3.5" />
                   </button>
-                  <button
-                    onClick={() => {
-                      if (confirm(`آیا از حذف پرونده پرسنلی «${emp.name}» مطمئن هستید؟`)) {
-                        onDeleteEmployee(emp.id);
-                      }
-                    }}
-                    className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer"
-                    title="حذف پرسنل"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {isAdminUser(emp) ? (
+                    <div 
+                      className="p-1.5 text-slate-500 bg-slate-800/40 rounded-lg cursor-not-allowed opacity-50 flex items-center justify-center"
+                      title="حساب مدیر ارشد سیستم (Admin) محافظت‌شده و غیرقابل حذف است"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setEmployeeToDelete(emp)}
+                      className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800/80 rounded-lg transition-colors cursor-pointer"
+                      title="حذف پرونده پرسنل"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -684,17 +698,23 @@ export default function Employees({
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
-                      <button
-                        onClick={() => {
-                          if (confirm(`آیا از حذف پرونده پرسنلی «${emp.name}» مطمئن هستید؟`)) {
-                            onDeleteEmployee(emp.id);
-                          }
-                        }}
-                        className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
-                        title="حذف پرسنل"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {isAdminUser(emp) ? (
+                        <div 
+                          className="p-1.5 text-slate-500 bg-slate-800/40 rounded-lg cursor-not-allowed opacity-50 flex items-center justify-center"
+                          title="حساب مدیر ارشد سیستم (Admin) محافظت‌شده و غیرقابل حذف است"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setEmployeeToDelete(emp)}
+                          className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
+                          title="حذف پرونده پرسنل"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1027,6 +1047,81 @@ export default function Employees({
         onClose={() => setIsExchangeModalOpen(false)}
         theme={theme}
       />
+
+      {/* In-App Delete Confirmation Modal (Protects against sandboxed iframe confirm blockage) */}
+      {employeeToDelete && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید نهایی حذف پرونده پرسنلی</h3>
+                <p className="text-[11px] text-slate-400">این عملیات بلافاصله اعمال شده و دائمی است</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>نام و نام خانوادگی:</span>
+                <span className="font-bold text-slate-100">{employeeToDelete.name}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>کد پرسنلی:</span>
+                <span className="font-mono text-teal-400">{employeeToDelete.code}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>واحد سازمانی:</span>
+                <span className="text-slate-300">{employeeToDelete.unit}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>نقش کاربری:</span>
+                <span className="font-bold">{getRoleLabel(employeeToDelete.role)}</span>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                توجه: با حذف پرونده همکار، تمامی ارزیابی‌ها، خودارزیابی‌ها و اهداف کارگاهی مرتبط با ایشان به صورت خودکار از سیستم پاکسازی خواهند شد.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setEmployeeToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const empName = employeeToDelete.name;
+                  onDeleteEmployee(employeeToDelete.id);
+                  setEmployeeToDelete(null);
+                  setDeleteToast(`پرونده پرسنلی «${empName}» با موفقیت از سیستم حذف شد.`);
+                  setTimeout(() => setDeleteToast(null), 3500);
+                }}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>بله، حذف پرونده</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Success Toast */}
+      {deleteToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-teal-500 text-slate-950 font-bold px-4 py-2.5 rounded-2xl shadow-xl border border-teal-400 flex items-center gap-2 animate-in slide-in-from-bottom-5">
+          <CheckCircle2 className="w-4 h-4 text-slate-950" />
+          <span className="text-xs">{deleteToast}</span>
+        </div>
+      )}
     </div>
   );
 }

@@ -27,7 +27,9 @@ import {
   GitFork,
   Calculator,
   Target,
-  Monitor
+  Monitor,
+  Printer,
+  FileText
 } from 'lucide-react';
 import { Employee, UserRole } from '../types';
 
@@ -42,6 +44,8 @@ interface SidebarProps {
   employees?: Employee[];
   onSwitchUser?: (empId: string) => void;
   onStartTour: () => void;
+  onOpenManual?: () => void;
+  canDownloadManual?: boolean;
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
 }
@@ -55,6 +59,8 @@ export default function Sidebar({
   onToggleTheme, 
   hasCertifiedBadge,
   onStartTour,
+  onOpenManual,
+  canDownloadManual = true,
   isMobileOpen = false,
   onCloseMobile
 }: SidebarProps) {
@@ -234,6 +240,19 @@ export default function Sidebar({
         <div className={`p-3 border-t flex flex-col gap-2 shrink-0 ${
           theme === 'dark' ? 'border-slate-800 bg-slate-950/70' : 'border-slate-200 bg-slate-50'
         }`}>
+          {/* Comprehensive PDF Manual button */}
+          {onOpenManual && (
+            <button
+              type="button"
+              onClick={onOpenManual}
+              className="w-full flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-[11px] font-bold transition-all shadow-md shadow-teal-600/20 cursor-pointer"
+              title={canDownloadManual ? "مشاهده و دریافت کتابچه راهنمای جامع PDF" : "مشاهده آنلاین کتابچه راهنمای جامع سامانه"}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>{canDownloadManual ? "دانلود کتابچه راهنما (PDF)" : "مشاهده کتابچه راهنما (آنلاین)"}</span>
+            </button>
+          )}
+
           {/* Interactive Tour link */}
           <button
             type="button"

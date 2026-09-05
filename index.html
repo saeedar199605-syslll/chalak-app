@@ -1,14 +1,30 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" class="light-theme">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b0f19" />
+    <meta name="theme-color" content="#f8fafc" />
     <title>سامانه ارزیابی عملکرد و مربیگری شرکت اصفهان چالاک</title>
     <meta name="description" content="سامانه جامع ارزیابی عملکرد و پایش بهره‌وری سازمانی، اهداف OKR، جلسات ۱به۱، بازخورد و تمجید (Lattice) و پایش زنده کارکرد و زمان پرسنل (Kickidler)" />
     <meta property="og:title" content="سامانه ارزیابی عملکرد و مربیگری شرکت اصفهان چالاک" />
     <meta property="og:description" content="سامانه جامع ارزیابی عملکرد و پایش بهره‌وری سازمانی، اهداف OKR، جلسات ۱به۱، بازخورد و تمجید (Lattice) و پایش زنده کارکرد و زمان پرسنل (Kickidler)" />
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    
+    <!-- Theme initial state: Default to light theme -->
+    <script>
+      try {
+        var storedTheme = localStorage.getItem('pe_theme');
+        if (!storedTheme) {
+          storedTheme = 'light';
+          localStorage.setItem('pe_theme', 'light');
+        }
+        if (storedTheme === 'light') {
+          document.documentElement.classList.add('light-theme');
+        } else {
+          document.documentElement.classList.remove('light-theme');
+        }
+      } catch (e) {}
+    </script>
     
     <!-- High-Performance Persian Fonts Preconnect -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

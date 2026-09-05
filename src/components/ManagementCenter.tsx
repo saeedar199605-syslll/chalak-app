@@ -63,13 +63,22 @@ import {
   AlertTriangle,
   Info,
   History,
-  Gauge
+  Gauge,
+  BookOpen,
+  Printer
 } from 'lucide-react';
 import { Employee, JobProfile, Criterion, Evaluation, UserRole, UserCustomPermission, CategoryKey } from '../types';
 import ExcelIntegrationCenter from './ExcelIntegrationCenter';
 import PerformanceArchiveVault from './PerformanceArchiveVault';
 import ProductionCycleTimeCalculator from './ProductionCycleTimeCalculator';
 import { getArchivedEvaluations, saveArchivedEvaluations } from '../utils/archiveManager';
+import { 
+  ManualAccessPolicy, 
+  getManualAccessPolicy, 
+  saveManualAccessPolicy, 
+  canUserViewManual, 
+  canUserDownloadManual 
+} from '../utils/manualAccessManager';
 
 export interface SystemLog {
   id: string;
@@ -144,6 +153,8 @@ export default function ManagementCenter({
     if (saved) return JSON.parse(saved);
     return [];
   });
+
+  const [userToDelete, setUserToDelete] = useState<Employee | null>(null);
 
   useEffect(() => {
     localStorage.setItem('pe_user_passwords', JSON.stringify(userPasswords));
@@ -331,6 +342,151 @@ export default function ManagementCenter({
       type
     };
     setLogs(prev => [newLog, ...prev.slice(0, 199)]);
+  };
+
+  // --- 5. STATE & HANDLERS FOR MANUAL ACCESS & DOWNLOAD POLICY ---
+  const [manualPolicy, setManualPolicy] = useState<ManualAccessPolicy>(getManualAccessPolicy);
+  const [manualPolicyFeedback, setManualPolicyFeedback] = useState<string | null>(null);
+  const [manualSimulatorUserId, setManualSimulatorUserId] = useState<string>(() => employees[0]?.id || '');
+
+  const distinctUnits = useMemo(() => {
+    return Array.from(new Set(employees.map(e => e.unit).filter(Boolean)));
+  }, [employees]);
+
+  const simulatedEmployee = useMemo(() => {
+    return employees.find(e => e.id === manualSimulatorUserId) || employees[0] || null;
+  }, [employees, manualSimulatorUserId]);
+
+  const simulatedCanView = useMemo(() => {
+    return canUserViewManual(simulatedEmployee, manualPolicy);
+  }, [simulatedEmployee, manualPolicy]);
+
+  const simulatedCanDownload = useMemo(() => {
+    return canUserDownloadManual(simulatedEmployee, manualPolicy);
+  }, [simulatedEmployee, manualPolicy]);
+
+  const triggerManualFeedback = (msg: string) => {
+    setManualPolicyFeedback(msg);
+    setTimeout(() => setManualPolicyFeedback(null), 3500);
+  };
+
+  const handleToggleManualViewRole = (role: UserRole) => {
+    if (role === 'admin') return;
+    const isCurrentlyAllowed = manualPolicy.allowedRolesToView.includes(role);
+    const newViewRoles = isCurrentlyAllowed
+      ? manualPolicy.allowedRolesToView.filter(r => r !== role)
+      : [...manualPolicy.allowedRolesToView, role];
+
+    const newDownloadRoles = isCurrentlyAllowed
+      ? manualPolicy.allowedRolesToDownload.filter(r => r !== role)
+      : manualPolicy.allowedRolesToDownload;
+
+    const updated: ManualAccessPolicy = {
+      ...manualPolicy,
+      allowedRolesToView: newViewRoles,
+      allowedRolesToDownload: newDownloadRoles
+    };
+    setManualPolicy(updated);
+    saveManualAccessPolicy(updated, currentUser.name);
+    addLog('تغییر دسترسی مشاهده کتابچه راهنما', `نقش ${role} ${!isCurrentlyAllowed ? 'مجاز شد' : 'محدود شد'}`, 'warning');
+    triggerManualFeedback('تنظیمات مشاهده کتابچه راهنما ذخیره شد.');
+  };
+
+  const handleToggleManualDownloadRole = (role: UserRole) => {
+    if (role === 'admin') return;
+    const isCurrentlyAllowed = manualPolicy.allowedRolesToDownload.includes(role);
+    const newDownloadRoles = isCurrentlyAllowed
+      ? manualPolicy.allowedRolesToDownload.filter(r => r !== role)
+      : [...manualPolicy.allowedRolesToDownload, role];
+
+    const newViewRoles = !isCurrentlyAllowed && !manualPolicy.allowedRolesToView.includes(role)
+      ? [...manualPolicy.allowedRolesToView, role]
+      : manualPolicy.allowedRolesToView;
+
+    const updated: ManualAccessPolicy = {
+      ...manualPolicy,
+      allowedRolesToView: newViewRoles,
+      allowedRolesToDownload: newDownloadRoles
+    };
+    setManualPolicy(updated);
+    saveManualAccessPolicy(updated, currentUser.name);
+    addLog('تغییر مجوز دانلود کتابچه راهنما', `مجوز دانلود و چاپ PDF برای نقش ${role} ${!isCurrentlyAllowed ? 'فعال گردید' : 'غیرفعال شد'}`, 'warning');
+    triggerManualFeedback('مجوز دانلود و چاپ فایل PDF ذخیره شد.');
+  };
+
+  const handleToggleManualUnit = (unit: string) => {
+    const isCurrentlyAllowed = manualPolicy.allowedUnits.includes(unit);
+    const newUnits = isCurrentlyAllowed
+      ? manualPolicy.allowedUnits.filter(u => u !== unit)
+      : [...manualPolicy.allowedUnits, unit];
+
+    const updated: ManualAccessPolicy = {
+      ...manualPolicy,
+      allowedUnits: newUnits
+    };
+    setManualPolicy(updated);
+    saveManualAccessPolicy(updated, currentUser.name);
+    addLog('تغییر فیلتر واحدهای مجاز کتابچه', `واحد ${unit} ${!isCurrentlyAllowed ? 'به فهرست مجاز افزوده شد' : 'از فهرست مجاز حذف شد'}`, 'info');
+    triggerManualFeedback('فیلتر واحدهای سازمانی ذخیره شد.');
+  };
+
+  const handleClearManualUnits = () => {
+    const updated: ManualAccessPolicy = {
+      ...manualPolicy,
+      allowedUnits: []
+    };
+    setManualPolicy(updated);
+    saveManualAccessPolicy(updated, currentUser.name);
+    addLog('حذف محدودیت واحدها برای کتابچه', 'کتابچه برای تمامی واحدهای سازمان آزاد شد', 'info');
+    triggerManualFeedback('محدودیت واحدها برداشته شد (آزاد برای تمام واحدها).');
+  };
+
+  const handleToggleManualWatermark = (val: boolean) => {
+    const updated: ManualAccessPolicy = {
+      ...manualPolicy,
+      showWatermark: val
+    };
+    setManualPolicy(updated);
+    saveManualAccessPolicy(updated, currentUser.name);
+    addLog('تغییر وضعیت واترمارک کتابچه', `واترمارک امنیتی ${val ? 'فعال' : 'غیرفعال'} شد`, 'info');
+    triggerManualFeedback(`واترمارک امنیتی هوشمند ${val ? 'فعال' : 'غیرفعال'} شد.`);
+  };
+
+  const handleApplyManualPreset = (preset: 'all' | 'standard' | 'supervisors' | 'admin_only') => {
+    let updated: ManualAccessPolicy;
+    if (preset === 'all') {
+      updated = {
+        ...manualPolicy,
+        allowedRolesToView: ['admin', 'supervisor', 'employee'],
+        allowedRolesToDownload: ['admin', 'supervisor', 'employee'],
+        allowedUnits: []
+      };
+    } else if (preset === 'standard') {
+      updated = {
+        ...manualPolicy,
+        allowedRolesToView: ['admin', 'supervisor', 'employee'],
+        allowedRolesToDownload: ['admin', 'supervisor'],
+        allowedUnits: []
+      };
+    } else if (preset === 'supervisors') {
+      updated = {
+        ...manualPolicy,
+        allowedRolesToView: ['admin', 'supervisor'],
+        allowedRolesToDownload: ['admin', 'supervisor'],
+        allowedUnits: []
+      };
+    } else {
+      updated = {
+        ...manualPolicy,
+        allowedRolesToView: ['admin'],
+        allowedRolesToDownload: ['admin'],
+        allowedUnits: []
+      };
+    }
+    setManualPolicy(updated);
+    saveManualAccessPolicy(updated, currentUser.name);
+    addLog('اعمال الگوی دسترسی به کتابچه راهنما', `الگوی دسترسی به حالت ${preset} تغییر یافت`, 'success');
+    triggerManualFeedback('الگوی امنیتی جدید اعمال گردید.');
   };
 
   // --- USER CREDENTIAL HANDLERS ---
@@ -2050,6 +2206,25 @@ export default function ManagementCenter({
                             >
                               {isCopied ? <CheckCheck className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                             </button>
+
+                            {/* Delete User Button - Only non-admin */}
+                            {emp.role === 'admin' || emp.username === 'admin' || emp.code === 'ADMIN-001' ? (
+                              <div
+                                className="p-1.5 rounded-lg bg-slate-800/40 text-slate-500 opacity-50 cursor-not-allowed flex items-center justify-center"
+                                title="حساب مدیر ارشد سیستم غیرقابل حذف است"
+                              >
+                                <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setUserToDelete(emp)}
+                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
+                                title="حذف حساب و پرونده پرسنلی"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -2067,6 +2242,87 @@ export default function ManagementCenter({
 
           </div>
 
+        </div>
+      )}
+
+      {/* User Delete Confirmation Modal for Management Center */}
+      {userToDelete && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 text-right">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">حذف دائم حساب کاربری و پرونده</h3>
+                <p className="text-[11px] text-slate-400">اطلاعات از سامانه و دیتابیس پاکسازی می‌شوند</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>نام همکار:</span>
+                <span className="font-bold text-slate-100">{userToDelete.name}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>نام کاربری:</span>
+                <span className="font-mono text-teal-400">{userToDelete.username}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>واحد سازمانی:</span>
+                <span className="text-slate-300">{userToDelete.unit}</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-rose-300/90 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl leading-relaxed">
+              ⚠️ تمامی سوابق ارزیابی، نمرات دوره‌ها و دسترسی‌های این کاربر از سامانه حذف خواهند شد.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const newEmps = employees.filter(e => e.id !== userToDelete.id);
+                  const newEvals = evaluations.filter(ev => ev.empId !== userToDelete.id);
+                  onSetEmployees(newEmps);
+                  onSetEvaluations(newEvals);
+                  localStorage.setItem('pe_employees', JSON.stringify(newEmps));
+                  localStorage.setItem('pe_evaluations', JSON.stringify(newEvals));
+                  
+                  try {
+                    const uKey = userToDelete.username.toLowerCase();
+                    const pwMap = JSON.parse(localStorage.getItem('pe_user_passwords') || '{}');
+                    if (pwMap[uKey]) {
+                      delete pwMap[uKey];
+                      localStorage.setItem('pe_user_passwords', JSON.stringify(pwMap));
+                    }
+                  } catch (e) {}
+
+                  fetch('/api/state', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      pe_employees: newEmps,
+                      pe_evaluations: newEvals
+                    })
+                  }).catch(console.error);
+
+                  setUserToDelete(null);
+                }}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف حساب</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -2388,6 +2644,424 @@ export default function ManagementCenter({
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* 3. POLICY AND SECURITY SETTINGS FOR COMPREHENSIVE MANUAL */}
+          <div className="bg-slate-800/40 border border-teal-500/30 rounded-3xl p-6 space-y-6 shadow-xl">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <BookOpen className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-black text-slate-100">سیاست دسترسی و دانلود کتابچه راهنمای جامع (Manual Access & Download Policy)</h2>
+                    <span className="text-[10px] font-bold bg-teal-500/10 text-teal-300 border border-teal-500/20 px-2.5 py-0.5 rounded-full">
+                      امنیت و حریم اسناد سازمانی
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    تعیین دقیق اینکه چه کسانی (بر اساس نقش کاربری یا واحد سازمانی) مجاز به مشاهده کتابچه هستند و چه کسانی اجازه دانلود PDF و چاپ آن را دارند
+                  </p>
+                </div>
+              </div>
+
+              {/* Quick Policy Presets */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-400 font-bold">الگوهای آماده:</span>
+                <button
+                  type="button"
+                  onClick={() => handleApplyManualPreset('all')}
+                  className="bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-bold py-1.5 px-3 rounded-xl transition-all cursor-pointer"
+                  title="همه افراد مجاز به مشاهده و دانلود هستند"
+                >
+                  عمومی (همه افراد)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyManualPreset('standard')}
+                  className="bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 text-xs font-bold py-1.5 px-3 rounded-xl transition-all cursor-pointer"
+                  title="پرسنل فقط مشاهده آنلاین، سرپرستان و ادمین مشاهده + دانلود"
+                >
+                  استاندارد سازمانی
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyManualPreset('supervisors')}
+                  className="bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-xs font-bold py-1.5 px-3 rounded-xl transition-all cursor-pointer"
+                  title="فقط سرپرستان و ادمین مجازند"
+                >
+                  فقط سرپرستان
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyManualPreset('admin_only')}
+                  className="bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-bold py-1.5 px-3 rounded-xl transition-all cursor-pointer"
+                  title="فقط ادمین سیستم مجاز است"
+                >
+                  محرمانه (فقط ادمین)
+                </button>
+              </div>
+            </div>
+
+            {/* Feedback notification */}
+            {manualPolicyFeedback && (
+              <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{manualPolicyFeedback}</span>
+              </div>
+            )}
+
+            {/* Main Policy Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              
+              {/* Left/Middle Column: Roles Matrix & Watermark (7 Cols) */}
+              <div className="lg:col-span-7 space-y-6">
+                
+                {/* Roles Matrix Table */}
+                <div className="bg-slate-950/60 border border-slate-800 rounded-2xl overflow-hidden p-4">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <Sliders className="w-4 h-4 text-teal-400" />
+                      <h3 className="text-xs font-black text-slate-200">ماتریس تفکیکی سطوح دسترسی بر اساس نقش سازمانی</h3>
+                    </div>
+                    <span className="text-[10px] text-slate-400">تغییرات بلافاصله اعمال می‌شوند</span>
+                  </div>
+
+                  <table className="w-full text-right text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400">
+                        <th className="pb-2 font-bold pr-2">نقش سازمانی</th>
+                        <th className="pb-2 font-bold text-center">مجوز مشاهده و مطالعه</th>
+                        <th className="pb-2 font-bold text-center">مجوز دانلود PDF و چاپ</th>
+                        <th className="pb-2 font-bold text-left pl-2">وضعیت دسترسی</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      
+                      {/* Admin Row */}
+                      <tr className="hover:bg-slate-900/40 transition-colors">
+                        <td className="py-3 pr-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                            <div>
+                              <span className="font-black text-slate-100">مدیر ارشد سیستم (Admin)</span>
+                              <p className="text-[10px] text-slate-400">راهبر کل سامانه و حراست</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 text-center">
+                          <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold border border-emerald-500/20">
+                            <Check className="w-3 h-3" />
+                            <span>دائمی</span>
+                          </div>
+                        </td>
+                        <td className="py-3 text-center">
+                          <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-bold border border-emerald-500/20">
+                            <Check className="w-3 h-3" />
+                            <span>دائمی</span>
+                          </div>
+                        </td>
+                        <td className="py-3 text-left pl-2">
+                          <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                            دسترسی کامل و نامحدود
+                          </span>
+                        </td>
+                      </tr>
+
+                      {/* Supervisor Row */}
+                      <tr className="hover:bg-slate-900/40 transition-colors">
+                        <td className="py-3 pr-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-teal-400" />
+                            <div>
+                              <span className="font-black text-slate-100">سرپرستان خط و واحدها (Supervisor)</span>
+                              <p className="text-[10px] text-slate-400">سرپرستان خطوط تولید و سرپرستان میانی</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 text-center">
+                          <label className="inline-flex items-center justify-center p-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={manualPolicy.allowedRolesToView.includes('supervisor')}
+                              onChange={() => handleToggleManualViewRole('supervisor')}
+                              className="w-4 h-4 text-teal-500 rounded border-slate-700 bg-slate-900 focus:ring-teal-500 cursor-pointer"
+                            />
+                          </label>
+                        </td>
+                        <td className="py-3 text-center">
+                          <label className="inline-flex items-center justify-center p-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={manualPolicy.allowedRolesToDownload.includes('supervisor')}
+                              onChange={() => handleToggleManualDownloadRole('supervisor')}
+                              className="w-4 h-4 text-amber-500 rounded border-slate-700 bg-slate-900 focus:ring-amber-500 cursor-pointer"
+                            />
+                          </label>
+                        </td>
+                        <td className="py-3 text-left pl-2">
+                          {manualPolicy.allowedRolesToDownload.includes('supervisor') ? (
+                            <span className="text-[10px] font-bold text-teal-300 bg-teal-500/15 px-2 py-0.5 rounded-full border border-teal-500/30">
+                              مشاهده + دانلود PDF
+                            </span>
+                          ) : manualPolicy.allowedRolesToView.includes('supervisor') ? (
+                            <span className="text-[10px] font-bold text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded-full border border-amber-500/30">
+                              فقط مطالعه آنلاین
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold text-rose-300 bg-rose-500/15 px-2 py-0.5 rounded-full border border-rose-500/30">
+                              مسدود شده
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+
+                      {/* Employee Row */}
+                      <tr className="hover:bg-slate-900/40 transition-colors">
+                        <td className="py-3 pr-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-indigo-400" />
+                            <div>
+                              <span className="font-black text-slate-100">کارمندان، اپراتورها و تکنسین‌ها (Employee)</span>
+                              <p className="text-[10px] text-slate-400">پرسنل اجرایی و اپراتورهای ایستگاه‌های کاری</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 text-center">
+                          <label className="inline-flex items-center justify-center p-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={manualPolicy.allowedRolesToView.includes('employee')}
+                              onChange={() => handleToggleManualViewRole('employee')}
+                              className="w-4 h-4 text-teal-500 rounded border-slate-700 bg-slate-900 focus:ring-teal-500 cursor-pointer"
+                            />
+                          </label>
+                        </td>
+                        <td className="py-3 text-center">
+                          <label className="inline-flex items-center justify-center p-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={manualPolicy.allowedRolesToDownload.includes('employee')}
+                              onChange={() => handleToggleManualDownloadRole('employee')}
+                              className="w-4 h-4 text-amber-500 rounded border-slate-700 bg-slate-900 focus:ring-amber-500 cursor-pointer"
+                            />
+                          </label>
+                        </td>
+                        <td className="py-3 text-left pl-2">
+                          {manualPolicy.allowedRolesToDownload.includes('employee') ? (
+                            <span className="text-[10px] font-bold text-teal-300 bg-teal-500/15 px-2 py-0.5 rounded-full border border-teal-500/30">
+                              مشاهده + دانلود PDF
+                            </span>
+                          ) : manualPolicy.allowedRolesToView.includes('employee') ? (
+                            <span className="text-[10px] font-bold text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded-full border border-amber-500/30">
+                              فقط مطالعه آنلاین
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold text-rose-300 bg-rose-500/15 px-2 py-0.5 rounded-full border border-rose-500/30">
+                              مسدود شده
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Organizational Unit Filtering */}
+                <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-4 h-4 text-teal-400" />
+                      <h4 className="text-xs font-black text-slate-200">محدودسازی به واحدهای سازمانی خاص (اختیاری)</h4>
+                    </div>
+                    {manualPolicy.allowedUnits.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearManualUnits}
+                        className="text-[10px] text-teal-400 hover:text-teal-300 underline cursor-pointer"
+                      >
+                        آزادسازی برای تمامی واحدها
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    اگر مایلید کتابچه فقط برای پرسنل شاغل در برخی واحدهای مشخص در دسترس باشد، واحدهای مجاز را تیک بزنید. در صورت خالی بودن، کتابچه به همه واحدهای سازمان تعلق دارد.
+                  </p>
+
+                  <div className="flex items-center gap-2 flex-wrap pt-1">
+                    {distinctUnits.map(unit => {
+                      const isAllowed = manualPolicy.allowedUnits.includes(unit);
+                      return (
+                        <button
+                          key={unit}
+                          type="button"
+                          onClick={() => handleToggleManualUnit(unit)}
+                          className={`text-xs font-bold py-1.5 px-3 rounded-xl border transition-all cursor-pointer flex items-center gap-1.5 ${
+                            isAllowed
+                              ? 'bg-teal-500/20 text-teal-300 border-teal-500/40 shadow-sm'
+                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700'
+                          }`}
+                        >
+                          {isAllowed ? <Check className="w-3 h-3 text-teal-400" /> : <div className="w-1.5 h-1.5 rounded-full bg-slate-600" />}
+                          <span>{unit}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {manualPolicy.allowedUnits.length > 0 && (
+                    <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[11px] flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>فقط همکاران شاغل در {manualPolicy.allowedUnits.length} واحد انتخاب‌شده مجاز به دسترسی خواهند بود.</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Smart Watermark Switch */}
+                <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-teal-400" />
+                      <span className="text-xs font-bold text-slate-200">واترمارک امنیتی هوشمند در نسخه چاپی PDF</span>
+                      <span className="text-[10px] bg-teal-500/10 text-teal-400 px-2 py-0.5 rounded border border-teal-500/20">ردیابی اسناد</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      درج نام کاربر، کد پرسنلی و تاریخ استخراج در حاشیه اسناد خروجی جهت جلوگیری از نشر غیرمجاز اسناد کارخانه
+                    </p>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={manualPolicy.showWatermark}
+                      onChange={(e) => handleToggleManualWatermark(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-600"></div>
+                  </label>
+                </div>
+
+              </div>
+
+              {/* Right Column: Live Permission Inspector & Simulator (5 Cols) */}
+              <div className="lg:col-span-5 space-y-4">
+                <div className="bg-gradient-to-b from-slate-950 to-slate-900 border border-teal-500/30 rounded-2xl p-5 space-y-4 shadow-lg">
+                  <div className="flex items-center gap-2.5 border-b border-slate-800 pb-3">
+                    <div className="w-8 h-8 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                      <UserCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-slate-100">شبیه‌ساز و استعلام زنده دسترسی پرسنل</h4>
+                      <p className="text-[10px] text-slate-400">آزمایش دسترسی هر همکار طبق سیاست‌های تعیین‌شده</p>
+                    </div>
+                  </div>
+
+                  {/* Employee Select */}
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-slate-300">انتخاب همکار جهت استعلام:</label>
+                    <select
+                      value={manualSimulatorUserId}
+                      onChange={(e) => setManualSimulatorUserId(e.target.value)}
+                      className="w-full bg-slate-900 text-slate-200 border border-slate-700 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-teal-500 cursor-pointer"
+                    >
+                      {employees.map(emp => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.name} ({emp.code}) - {emp.unit} [{emp.role === 'admin' ? 'مدیر' : emp.role === 'supervisor' ? 'سرپرست' : 'اپراتور'}]
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Simulation Result Card */}
+                  {simulatedEmployee && (
+                    <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 space-y-3.5">
+                      
+                      {/* User Info Bar */}
+                      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                        <div>
+                          <span className="text-xs font-black text-slate-100">{simulatedEmployee.name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono mr-2">کد: {simulatedEmployee.code}</span>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-800 text-slate-300 border border-slate-700">
+                          {simulatedEmployee.role === 'admin' ? 'مدیر ارشد' : simulatedEmployee.role === 'supervisor' ? 'سرپرست خط' : 'اپراتور کارگاه'}
+                        </span>
+                      </div>
+
+                      {/* View Permission Status */}
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400 flex items-center gap-1.5">
+                          <Eye className="w-3.5 h-3.5 text-teal-400" />
+                          <span>امکان مشاهده و باز کردن کتابچه:</span>
+                        </span>
+                        {simulatedCanView ? (
+                          <span className="font-bold text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/20">
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>مجاز به مطالعه</span>
+                          </span>
+                        ) : (
+                          <span className="font-bold text-rose-400 flex items-center gap-1 bg-rose-500/10 px-2 py-0.5 rounded-lg border border-rose-500/20">
+                            <Lock className="w-3 h-3" />
+                            <span>دسترسی مسدود</span>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Download Permission Status */}
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400 flex items-center gap-1.5">
+                          <Download className="w-3.5 h-3.5 text-amber-400" />
+                          <span>امکان دانلود PDF و چاپ فایل:</span>
+                        </span>
+                        {simulatedCanDownload ? (
+                          <span className="font-bold text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/20">
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>دانلود و پرینت فعال</span>
+                          </span>
+                        ) : (
+                          <span className="font-bold text-amber-400 flex items-center gap-1 bg-amber-500/10 px-2 py-0.5 rounded-lg border border-amber-500/20">
+                            <Lock className="w-3 h-3" />
+                            <span>دانلود قفل است</span>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Unit Filter Check */}
+                      <div className="flex items-center justify-between text-[11px] border-t border-slate-800/80 pt-2 text-slate-400">
+                        <span>واحد سازمانی ثبت‌شده:</span>
+                        <span className="font-bold text-slate-300">{simulatedEmployee.unit}</span>
+                      </div>
+
+                      {/* Live Explanation Note */}
+                      <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] text-slate-400 leading-relaxed">
+                        {simulatedCanDownload ? (
+                          <p className="text-emerald-300">
+                            ✓ این همکار دارای دسترسی دوگانه (مشاهده آنلاین و خروجی چاپی PDF) در سربرگ سامانه و منوی کناری است.
+                          </p>
+                        ) : simulatedCanView ? (
+                          <p className="text-amber-300">
+                            ⚠️ این همکار مجاز به مطالعه کتابچه به صورت آنلاین در سامانه است، اما دکمه‌های پرینت و دریافت PDF برای او غیرفعال خواهد بود.
+                          </p>
+                        ) : (
+                          <p className="text-rose-300">
+                            ⛔ کتابچه راهنما در منوی کاربری این همکار پنهان بوده و در صورت تلاش برای باز کردن، پیام امنیتی «دسترسی محدود» نمایش داده خواهد شد.
+                          </p>
+                        )}
+                      </div>
+
+                    </div>
+                  )}
+
+                  <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                    <Info className="w-3.5 h-3.5 shrink-0" />
+                    <span>سیاست‌ها بلافاصله در تمام بخش‌های سامانه و سشن‌های کاربری اعمال می‌گردند.</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
           </div>
 
         </div>

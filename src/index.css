@@ -334,14 +334,42 @@ html.light-theme .border-amber-500\/20 {
   border-color: rgba(234, 88, 12, 0.15) !important;
 }
 
-/* Print Optimization */
+/* Print Optimization & High-Fidelity A4 PDF Export */
 @media print {
-  aside, .no-print, header {
+  @page {
+    size: A4 portrait;
+    margin: 12mm 14mm 14mm 14mm;
+  }
+  aside, .no-print, header, nav {
     display: none !important;
+  }
+  body, html {
+    background: #ffffff !important;
+    color: #0f172a !important;
   }
   main {
     padding: 0 !important;
+    margin: 0 !important;
     background: #ffffff !important;
     color: #000000 !important;
+    overflow: visible !important;
+  }
+  #printable-manual-document {
+    width: 100% !important;
+    max-width: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+  }
+  /* Avoid breaking inside sections or cards */
+  section, table, tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  h1, h2, h3 {
+    break-after: avoid;
+    page-break-after: avoid;
   }
 }

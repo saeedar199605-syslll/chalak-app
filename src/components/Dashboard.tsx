@@ -21,10 +21,12 @@ import {
   Plus,
   Trash2
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import { Criterion, JobProfile, Employee, Evaluation, CYCLE_STEPS, getGrade, GRADE_DETAILS } from '../types';
 import SmartGrowthAnalytics from './SmartGrowthAnalytics';
 import RadarChartD3, { CompetencyDimensionData } from './RadarChartD3';
 import SupervisorNotificationBell from './SupervisorNotificationBell';
+import CalendarWidget from './CalendarWidget';
 
 interface DashboardProps {
   criteria: Criterion[];
@@ -35,7 +37,33 @@ interface DashboardProps {
   onSelectEvaluation?: (id: string) => void;
   currentUser: Employee;
   hasCertifiedBadge: boolean;
+  theme?: 'dark' | 'light';
 }
+
+const staggerContainerVariants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.08,
+      delayChildren: 0.05
+    }
+  }
+};
+
+const topCardVariants = {
+  hidden: { opacity: 0, y: 22, scale: 0.96 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: {
+      type: 'spring',
+      stiffness: 250,
+      damping: 22
+    }
+  }
+};
 
 export default function Dashboard({ 
   criteria, 
@@ -45,7 +73,8 @@ export default function Dashboard({
   onNavigate,
   onSelectEvaluation,
   currentUser,
-  hasCertifiedBadge
+  hasCertifiedBadge,
+  theme = 'light'
 }: DashboardProps) {
   const [selectedCycleStep, setSelectedCycleStep] = useState<number>(4); // Default to supervisor assessment or calibration
 
@@ -233,7 +262,7 @@ export default function Dashboard({
             employees={employees}
             currentUser={currentUser}
             onNavigate={onNavigate}
-            theme="dark"
+            theme={theme}
           />
           <div className="text-[10px] font-bold text-teal-400 bg-teal-500/10 border border-teal-500/20 px-3 py-1.5 rounded-full flex items-center gap-1.5">
             <span>واحد ارزیابی عملکرد اصفهان چالاک</span>
@@ -274,10 +303,19 @@ export default function Dashboard({
         </div>
       )}
 
-      {/* Top Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Top Cards Grid with Sequential Framer Motion Animation */}
+      <motion.div 
+        variants={staggerContainerVariants}
+        initial="hidden"
+        animate="visible"
+        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"
+      >
         {/* Card 1 */}
-        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 relative overflow-hidden group hover:border-teal-500/30 transition-all duration-300">
+        <motion.div 
+          variants={topCardVariants}
+          whileHover={{ y: -4, transition: { duration: 0.2 } }}
+          className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 relative overflow-hidden group hover:border-teal-500/30 transition-all duration-300"
+        >
           <div className="flex justify-between items-start">
             <div>
               <p className="text-xs font-semibold text-slate-400">بانک مرکزی معیارها</p>
@@ -289,10 +327,14 @@ export default function Dashboard({
           </div>
           <p className="text-[10px] text-slate-500 mt-3">شاخص‌های کمی (KPI) و شایستگی‌های رفتاری مصوب</p>
           <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-teal-500/5 to-transparent rounded-bl-full pointer-events-none" />
-        </div>
+        </motion.div>
 
         {/* Card 2 */}
-        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 relative overflow-hidden group hover:border-indigo-500/30 transition-all duration-300">
+        <motion.div 
+          variants={topCardVariants}
+          whileHover={{ y: -4, transition: { duration: 0.2 } }}
+          className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 relative overflow-hidden group hover:border-indigo-500/30 transition-all duration-300"
+        >
           <div className="flex justify-between items-start">
             <div>
               <p className="text-xs font-semibold text-slate-400">پروفایل‌های شایستگی</p>
@@ -304,10 +346,14 @@ export default function Dashboard({
           </div>
           <p className="text-[10px] text-slate-500 mt-3">الگوهای متمایز ارزیابی متناسب با خانواده‌های شغلی</p>
           <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-indigo-500/5 to-transparent rounded-bl-full pointer-events-none" />
-        </div>
+        </motion.div>
 
         {/* Card 3 */}
-        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 relative overflow-hidden group hover:border-sky-500/30 transition-all duration-300">
+        <motion.div 
+          variants={topCardVariants}
+          whileHover={{ y: -4, transition: { duration: 0.2 } }}
+          className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 relative overflow-hidden group hover:border-sky-500/30 transition-all duration-300"
+        >
           <div className="flex justify-between items-start">
             <div>
               <p className="text-xs font-semibold text-slate-400">کل پرسنل ثبت شده</p>
@@ -319,10 +365,14 @@ export default function Dashboard({
           </div>
           <p className="text-[10px] text-slate-500 mt-3">پرسنل تخصیص یافته به واحدهای عملیاتی و آزمایشگاهی</p>
           <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-sky-500/5 to-transparent rounded-bl-full pointer-events-none" />
-        </div>
+        </motion.div>
 
         {/* Card 4 */}
-        <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 relative overflow-hidden group hover:border-emerald-500/30 transition-all duration-300">
+        <motion.div 
+          variants={topCardVariants}
+          whileHover={{ y: -4, transition: { duration: 0.2 } }}
+          className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-5 relative overflow-hidden group hover:border-emerald-500/30 transition-all duration-300"
+        >
           <div className="flex justify-between items-start">
             <div>
               <p className="text-xs font-semibold text-slate-400">میانگین امتیاز نهایی سازمان</p>
@@ -336,8 +386,8 @@ export default function Dashboard({
           </div>
           <p className="text-[10px] text-slate-500 mt-3">محاسبه بر اساس نتایج کالیبره و نهایی شده (از ۱۰۰)</p>
           <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-emerald-500/5 to-transparent rounded-bl-full pointer-events-none" />
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
 
       {/* ==========================================================================
          Smart Competency Growth & Multi-Period Predictive AI Analytics
@@ -619,6 +669,25 @@ export default function Dashboard({
         </div>
 
       </div>
+
+      {/* ==========================================================================
+         Supervisor & Leadership Operations Calendar Widget
+         ========================================================================== */}
+      {(currentUser.role === 'supervisor' || currentUser.role === 'admin') && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, delay: 0.1 }}
+          className="mt-6"
+        >
+          <CalendarWidget
+            currentUser={currentUser}
+            evaluations={evaluations}
+            onNavigate={onNavigate}
+            theme={theme}
+          />
+        </motion.div>
+      )}
 
       {/* ==========================================================================
          KPI & Coaching targets Planner
