@@ -5,6 +5,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { validateEmployeeInput } from '../utils/validation';
+import { db, CURRENT_ACTIVE_PERIOD } from '../utils/db';
 import { 
   Users, 
   Plus, 
@@ -35,6 +36,7 @@ interface EmployeesProps {
   profiles: JobProfile[];
   onAddEmployee: (emp: Omit<Employee, 'id'>) => void;
   onUpdateEmployee: (id: string, emp: Omit<Employee, 'id'>) => void;
+  onBulkUpdateEmployees?: (employees: Employee[]) => void;
   onDeleteEmployee: (id: string) => void;
   onStartEvaluation: (empId: string) => void;
   theme?: 'dark' | 'light';
@@ -77,6 +79,7 @@ export default function Employees({
   profiles,
   onAddEmployee,
   onUpdateEmployee,
+  onBulkUpdateEmployees,
   onDeleteEmployee,
   onStartEvaluation,
   theme = 'light'
@@ -172,15 +175,45 @@ export default function Employees({
       }
     ],
     onImport: (importedItems, mode) => {
-      let successCount = 0;
+      let createdCount = 0;
+      let updatedCount = 0;
       const errors: string[] = [];
       const defaultProfId = profiles[0]?.id || 'prof-1';
+
+      // Initialize working copy based on mode
+      // If replace mode, protect system administrator accounts
+      let workingEmployees: Employee[] = mode === 'replace'
+        ? employees.filter(e => e.role === 'admin' || e.username === 'admin' || e.code === 'ADMIN-001')
+        : [...employees];
+
+      // Track processed codes and usernames within this batch to prevent internal duplicates
+      const seenBatchCodes = new Set<string>();
+      const seenBatchUsernames = new Set<string>();
+
+      // List of new employees that need evaluation shells created
+      const newEmployeesForEval: Employee[] = [];
 
       importedItems.forEach((rawItem: any, index: number) => {
         const rowNum = index + 1;
         const name = (rawItem.name || rawItem['نام و نام خانوادگی'] || '').trim();
         const code = (rawItem.code || rawItem['کد پرسنلی'] || '').trim().toUpperCase();
         const unit = (rawItem.unit || rawItem['واحد سازمانی'] || 'سالن تولید').trim();
+
+        if (!name && !code) {
+          errors.push(`سطر ${rowNum}: سطر فاقد نام و کد پرسنلی بوده و نادیده گرفته شد.`);
+          return;
+        }
+
+        if (!code) {
+          errors.push(`سطر ${rowNum} (${name}): کد پرسنلی الزامی است.`);
+          return;
+        }
+
+        if (seenBatchCodes.has(code)) {
+          errors.push(`سطر ${rowNum} (${name}): کد پرسنلی «${code}» در همین فایل تکراری است.`);
+          return;
+        }
+        seenBatchCodes.add(code);
         
         // Match profile by ID, title, or code
         const rawProf = (rawItem.profile || rawItem.profileId || rawItem['عنوان رده شغلی'] || rawItem['پروفایل شغلی'] || '').trim();
@@ -193,6 +226,8 @@ export default function Employees({
           );
           if (matchedProfile) {
             profileId = matchedProfile.id;
+          } else {
+            errors.push(`سطر ${rowNum} (${name}): الگوی شغلی «${rawProf}» یافت نشد؛ الگوی پیش‌فرض اعمال شد.`);
           }
         }
 
@@ -205,21 +240,43 @@ export default function Employees({
           role = 'supervisor';
         }
 
-        // Username
-        let username = (rawItem.username || rawItem['نام کاربری'] || '').trim().toLowerCase();
-        if (!username && code) {
-          username = `user_${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+        // Clean & unique username
+        let username = (rawItem.username || rawItem['نام کاربری'] || '').trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+        if (!username) {
+          const cleanCode = code.toLowerCase().replace(/[^a-z0-9]/g, '');
+          username = `user_${cleanCode || Math.random().toString(36).substring(2, 7)}`;
         }
 
-        // Supervisors & Hierarchy IDs
+        // Ensure unique username across working list and current batch
+        let finalUsername = username;
+        let counter = 1;
+        while (
+          seenBatchUsernames.has(finalUsername) || 
+          workingEmployees.some(e => e.username.toLowerCase() === finalUsername.toLowerCase() && e.code !== code)
+        ) {
+          finalUsername = `${username}_${counter}`;
+          counter++;
+        }
+        seenBatchUsernames.add(finalUsername);
+
+        // Supervisors & Hierarchy IDs (check in working employees or existing roster)
         const rawSupCode = (rawItem.supervisor || rawItem.supervisorId || rawItem['کد پرسنلی سرپرست مستقیم'] || '').trim().toUpperCase();
-        const supervisor = rawSupCode ? employees.find(e => e.code.toUpperCase() === rawSupCode || e.id === rawSupCode) : undefined;
+        const supervisor = rawSupCode ? (
+          workingEmployees.find(e => e.code.toUpperCase() === rawSupCode || e.id === rawSupCode) ||
+          employees.find(e => e.code.toUpperCase() === rawSupCode || e.id === rawSupCode)
+        ) : undefined;
 
         const rawPeerCode = (rawItem.peer || rawItem.peerReviewerId || rawItem['کد پرسنلی ارزیاب همتا'] || '').trim().toUpperCase();
-        const peer = rawPeerCode ? employees.find(e => e.code.toUpperCase() === rawPeerCode || e.id === rawPeerCode) : undefined;
+        const peer = rawPeerCode ? (
+          workingEmployees.find(e => e.code.toUpperCase() === rawPeerCode || e.id === rawPeerCode) ||
+          employees.find(e => e.code.toUpperCase() === rawPeerCode || e.id === rawPeerCode)
+        ) : undefined;
 
         const rawApproverCode = (rawItem.approver || rawItem.approverId || rawItem['کد پرسنلی تصویب‌کننده'] || '').trim().toUpperCase();
-        const approver = rawApproverCode ? employees.find(e => e.code.toUpperCase() === rawApproverCode || e.id === rawApproverCode) : undefined;
+        const approver = rawApproverCode ? (
+          workingEmployees.find(e => e.code.toUpperCase() === rawApproverCode || e.id === rawApproverCode) ||
+          employees.find(e => e.code.toUpperCase() === rawApproverCode || e.id === rawApproverCode)
+        ) : undefined;
 
         const candidate = {
           name,
@@ -227,7 +284,7 @@ export default function Employees({
           unit,
           profileId,
           role,
-          username,
+          username: finalUsername,
           supervisorId: supervisor?.id,
           peerReviewerId: peer?.id,
           approverId: approver?.id
@@ -235,27 +292,111 @@ export default function Employees({
 
         const validation = validateEmployeeInput(candidate);
         if (!validation.success) {
-          errors.push(`سطر ${rowNum} (${name || code || 'ناشناس'}): ${validation.errors.join('، ')}`);
+          errors.push(`سطر ${rowNum} (${name || code}): ${validation.errors.join('، ')}`);
           return;
         }
 
         const validEmp = validation.data;
-        const existingEmp = employees.find(e => e.code.toUpperCase() === validEmp.code.toUpperCase() || e.username.toLowerCase() === validEmp.username.toLowerCase());
+        const existingIdx = workingEmployees.findIndex(
+          e => e.code.toUpperCase() === validEmp.code.toUpperCase() || 
+               e.username.toLowerCase() === validEmp.username.toLowerCase()
+        );
 
-        if (existingEmp) {
-          if (mode === 'replace' || mode === 'merge') {
-            onUpdateEmployee(existingEmp.id, validEmp);
-            successCount++;
-          }
+        if (existingIdx !== -1) {
+          // Update existing employee in place, preserving existing ID
+          const existing = workingEmployees[existingIdx];
+          workingEmployees[existingIdx] = {
+            ...validEmp,
+            id: existing.id
+          };
+          updatedCount++;
         } else {
-          onAddEmployee(validEmp);
-          successCount++;
+          // Add new employee
+          const newEmp: Employee = {
+            ...validEmp,
+            id: `emp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+          };
+          workingEmployees.push(newEmp);
+          newEmployeesForEval.push(newEmp);
+          createdCount++;
         }
       });
 
+      const totalSuccess = createdCount + updatedCount;
+      if (totalSuccess > 0) {
+        // Immediate persistence to localStorage and DB
+        db.saveEmployees(workingEmployees);
+        try {
+          localStorage.setItem('pe_employees', JSON.stringify(workingEmployees));
+        } catch {
+          // Ignore
+        }
+
+        // Automatically create evaluation shells for new employees so they are immediately visible
+        if (newEmployeesForEval.length > 0) {
+          try {
+            const currentEvals = db.getEvaluations();
+            const newEvals = [...currentEvals];
+            let evalsAdded = false;
+
+            newEmployeesForEval.forEach(emp => {
+              const hasEval = newEvals.some(ev => ev.empId === emp.id && ev.period === CURRENT_ACTIVE_PERIOD);
+              if (!hasEval) {
+                const targetProf = profiles.find(p => p.id === emp.profileId) || profiles[0];
+                if (targetProf) {
+                  const initialScores = (targetProf.items || []).map(item => ({
+                    cid: item.cid,
+                    weight: item.weight,
+                    value: 0,
+                    self: 0,
+                    doc: ''
+                  }));
+                  newEvals.push({
+                    id: `eval-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                    empId: emp.id,
+                    profileId: targetProf.id,
+                    period: CURRENT_ACTIVE_PERIOD,
+                    status: 'draft',
+                    stage: 'self_review',
+                    currentAssigneeId: emp.id,
+                    currentAssigneeRole: 'employee',
+                    currentAssigneeName: emp.name,
+                    scores: initialScores,
+                    created: Date.now()
+                  });
+                  evalsAdded = true;
+                }
+              }
+            });
+
+            if (evalsAdded) {
+              db.saveEvaluations(newEvals);
+              localStorage.setItem('pe_evaluations', JSON.stringify(newEvals));
+            }
+          } catch (e) {
+            console.warn('Auto evaluation creation for imported employees failed:', e);
+          }
+        }
+
+        // Notify parent state handler
+        if (onBulkUpdateEmployees) {
+          onBulkUpdateEmployees(workingEmployees);
+        } else {
+          // Fallback: reload page or notify individual
+          workingEmployees.forEach(emp => {
+            const orig = employees.find(e => e.id === emp.id);
+            if (orig) {
+              onUpdateEmployee(emp.id, emp);
+            } else {
+              onAddEmployee(emp);
+            }
+          });
+        }
+      }
+
       return {
-        count: successCount,
-        message: `تعداد ${successCount} پرونده پرسنلی با موفقیت در سامانه ثبت و به‌روزرسانی شد.`,
+        count: totalSuccess,
+        message: `تعداد ${totalSuccess} پرونده پرسنلی (${createdCount} پرونده جدید و ${updatedCount} به‌روزرسانی) با اعتبارسنجی کامل اسلات‌ها ثبت و پایدار شدند.`,
         errors
       };
     }
@@ -312,13 +453,25 @@ export default function Employees({
       setFormCalibrationLeadId(emp.calibrationLeadId || '');
       setFormApproverId(emp.approverId || '');
     } else {
+      // Auto-suggest next employee code
+      const highestNum = employees.reduce((max, e) => {
+        const match = e.code.match(/\d+/);
+        if (match) {
+          const num = parseInt(match[0], 10);
+          return num > max ? num : max;
+        }
+        return max;
+      }, 1000);
+      const nextCode = `EMP-${highestNum + 1}`;
+      const defaultUnit = employees[0]?.unit || 'واحد تولید';
+
       setEditingId(null);
       setFormName('');
-      setFormCode('');
-      setFormUnit('');
+      setFormCode(nextCode);
+      setFormUnit(defaultUnit);
       setFormProfileId(profiles[0]?.id || '');
       setFormRole('employee');
-      setFormUsername('');
+      setFormUsername(`user_${highestNum + 1}`);
       setFormSupervisorId('');
       setFormPeerReviewerId('');
       setFormCalibrationLeadId('');
@@ -332,13 +485,19 @@ export default function Employees({
     e.preventDefault();
     setErrorMsg('');
 
+    const codeClean = formCode.trim().toUpperCase();
+    let userClean = formUsername.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+    if (!userClean) {
+      userClean = `user_${codeClean.toLowerCase().replace(/[^a-z0-9]/g, '') || Math.random().toString(36).substring(2, 7)}`;
+    }
+
     const rawData = {
-      name: formName,
-      code: formCode,
-      unit: formUnit,
+      name: formName.trim(),
+      code: codeClean,
+      unit: formUnit.trim(),
       profileId: formProfileId,
       role: formRole,
-      username: formUsername,
+      username: userClean,
       supervisorId: formSupervisorId || undefined,
       peerReviewerId: formPeerReviewerId || undefined,
       calibrationLeadId: formCalibrationLeadId || undefined,
@@ -359,7 +518,7 @@ export default function Employees({
     );
 
     if (isDuplicateUser) {
-      setErrorMsg('این نام کاربری قبلاً توسط همکار دیگری ثبت شده است.');
+      setErrorMsg('این نام کاربری قبلاً توسط همکار دیگری ثبت شده است. لطفاً نام کاربری دیگری انتخاب کنید.');
       return;
     }
 
@@ -369,7 +528,7 @@ export default function Employees({
     );
 
     if (isDuplicateCode) {
-      setErrorMsg('این کد پرسنلی قبلاً برای همکار دیگری ثبت شده است.');
+      setErrorMsg('این کد پرسنلی قبلاً برای همکار دیگری ثبت شده است. لطفاً کد پرسنلی را تغییر دهید.');
       return;
     }
 
@@ -940,13 +1099,12 @@ export default function Employees({
               {/* NEW FIELDS: Username & Role */}
               <div className="grid grid-cols-2 gap-4 pt-2 border-t border-slate-800/60">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">نام کاربری ورود (به انگلیسی)</label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">نام کاربری ورود (انگلیسی)</label>
                   <input
                     type="text"
-                    required
-                    placeholder="مثال: amiri"
+                    placeholder="مثال: amiri یا خالی (تولید خودکار)"
                     value={formUsername}
-                    onChange={(e) => setFormUsername(e.target.value.replace(/[^a-zA-Z0-9]/g, ''))}
+                    onChange={(e) => setFormUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_.-]/g, ''))}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono"
                   />
                 </div>

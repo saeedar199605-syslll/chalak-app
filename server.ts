@@ -118,6 +118,51 @@ function getGeminiClient(): GoogleGenAI {
   return aiClient;
 }
 
+/**
+ * Exponential backoff retry mechanism for Gemini API calls.
+ * Gracefully handles 503 UNAVAILABLE, 429 RATE_LIMIT, and temporary network/server issues
+ * with jittered exponential backoff without crashing the user flow.
+ */
+async function callGeminiWithBackoff<T>(
+  operation: () => Promise<T>,
+  maxRetries = 4,
+  baseDelayMs = 1000
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await operation();
+    } catch (err: any) {
+      attempt++;
+      const errorMessage = String(err?.message || '');
+      const statusCode = err?.status || err?.statusCode || (err?.response ? err.response.status : null);
+
+      const isTransient =
+        statusCode === 503 ||
+        statusCode === 429 ||
+        statusCode === 500 ||
+        statusCode === 502 ||
+        statusCode === 504 ||
+        errorMessage.includes('503') ||
+        errorMessage.includes('UNAVAILABLE') ||
+        errorMessage.includes('overloaded') ||
+        errorMessage.includes('resource exhausted') ||
+        errorMessage.includes('ResourceExhausted') ||
+        errorMessage.includes('429');
+
+      if (!isTransient || attempt >= maxRetries) {
+        console.warn(`[Gemini Backoff] Attempt ${attempt}/${maxRetries} non-retryable or retries exhausted: ${errorMessage}`);
+        throw err;
+      }
+
+      // Calculate exponential backoff with full jitter to avoid thundering herd
+      const delay = baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 500;
+      console.warn(`[Gemini Backoff] Encountered transient error (${statusCode || errorMessage}). Retrying attempt ${attempt}/${maxRetries} in ${Math.round(delay)}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 // API: Health probe
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -170,7 +215,7 @@ app.post('/api/gemini/feedback', async (req, res) => {
       ۴. نقاط قوت شاخص را مشخص کنید.
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await callGeminiWithBackoff(() => ai.models.generateContent({
       model: 'gemini-3.7-flash',
       contents: prompt,
       config: {
@@ -208,7 +253,7 @@ app.post('/api/gemini/feedback', async (req, res) => {
           required: ["refinedComment", "competencyFeedback", "strengths", "actionPlan"]
         }
       }
-    });
+    }));
 
     const textResult = response.text;
     if (!textResult) {
@@ -280,7 +325,7 @@ app.post('/api/gemini/coaching', async (req, res) => {
       ۵. تمام متون حتماً فارسی سلیس، حرفه‌ای، دور از ادبیات کلیشه‌ای و کاملاً متناسب با نقش او باشند.
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await callGeminiWithBackoff(() => ai.models.generateContent({
       model: 'gemini-3.7-flash',
       contents: prompt,
       config: {
@@ -318,7 +363,7 @@ app.post('/api/gemini/coaching', async (req, res) => {
           required: ["feedback"]
         }
       }
-    });
+    }));
 
     const textResult = response.text;
     if (!textResult) {
@@ -380,7 +425,7 @@ app.post('/api/gemini/bias-check', async (req, res) => {
       - یک توصیه به ارزیاب (coachingAdvice) برای هدایت مکالمه حضوری بنویسید.
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await callGeminiWithBackoff(() => ai.models.generateContent({
       model: 'gemini-3.7-flash',
       contents: prompt,
       config: {
@@ -439,7 +484,7 @@ app.post('/api/gemini/bias-check', async (req, res) => {
           required: ["integrityScore", "hasWarnings", "biasesDetected", "suggestedRevision", "coachingAdvice"]
         }
       }
-    });
+    }));
 
     const text = response.text;
     if (!text) {
@@ -511,7 +556,7 @@ app.post('/api/gemini/nine-box-analysis', async (req, res) => {
       ۳. راهبردهای توسعه، جانشین‌پروری و برنامه‌های بهبود عملکرد (PIP) را مشخص سازید.
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await callGeminiWithBackoff(() => ai.models.generateContent({
       model: 'gemini-3.7-flash',
       contents: prompt,
       config: {
@@ -566,7 +611,7 @@ app.post('/api/gemini/nine-box-analysis', async (req, res) => {
           required: ["executiveSummary", "talentHealthScore", "boxRecommendations", "successionAndRetention", "riskInterventions"]
         }
       }
-    });
+    }));
 
     const text = response.text;
     if (!text) {
@@ -658,15 +703,18 @@ async function setupServer() {
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-    console.log("Vite development middleware integrated successfully.");
+    console.log("Vite development middleware integrated successfully with HMR disabled.");
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*all', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
     console.log("Serving static production assets from dist directory.");

@@ -50,7 +50,7 @@ export const EmployeeInputSchema = z.object({
     message: 'نقش سازمانی نامعتبر است.'
   }),
   username: z.string()
-    .min(2, 'نام کاربری باید حداقل ۲ کاراکتر باشد.')
+    .min(1, 'نام کاربری الزامی است.')
     .max(50, 'نام کاربری نامعتبر است.')
     .regex(/^[a-z0-9_.-]+$/, 'نام کاربری فقط می‌تواند شامل حروف انگلیسی، اعداد، نقطه و خط تیره باشد.'),
   supervisorId: z.string().max(50).optional(),
@@ -62,13 +62,21 @@ export const EmployeeInputSchema = z.object({
 
 export function sanitizeEmployeeData(data: any): any {
   if (!data || typeof data !== 'object') return data;
+
+  const codeSanitized = sanitizeInputString(data.code).toUpperCase();
+  let usernameRaw = sanitizeInputString(data.username).toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+  if (!usernameRaw) {
+    const codeClean = codeSanitized.toLowerCase().replace(/[^a-z0-9]/g, '');
+    usernameRaw = `user_${codeClean || Math.random().toString(36).substring(2, 7)}`;
+  }
+
   return {
     ...data,
     name: sanitizeInputString(data.name),
-    code: sanitizeInputString(data.code).toUpperCase(),
+    code: codeSanitized,
     unit: sanitizeInputString(data.unit),
     profileId: sanitizeInputString(data.profileId),
-    username: sanitizeInputString(data.username).toLowerCase(),
+    username: usernameRaw,
     supervisorId: data.supervisorId ? sanitizeInputString(data.supervisorId) : undefined,
     peerReviewerId: data.peerReviewerId ? sanitizeInputString(data.peerReviewerId) : undefined,
     calibrationLeadId: data.calibrationLeadId ? sanitizeInputString(data.calibrationLeadId) : undefined,
@@ -103,6 +111,11 @@ export const CriterionInputSchema = z.object({
   source: z.string().max(200).optional(),
   method: z.string().max(200).optional(),
   dir: z.enum(['more', 'less'] as const).optional(),
+  scoringSource: z.enum(['supervisor', 'mis', 'kasra', 'system'] as const).optional(),
+  misMetricKey: z.enum(['efficiency', 'scrap_rate', 'quality_score', 'output_qty', 'downtime', 'attendance_delay', 'attendance_absence', 'discipline', 'custom'] as const).optional(),
+  customMetricField: z.string().max(100).optional(),
+  autoPopulate: z.boolean().optional(),
+  misTargetValue: z.number().optional(),
   calculationType: z.enum(['ratio', 'inverse_ratio', 'defect_rate', 'custom_formula', 'direct_score'] as const).optional(),
   formulaExpression: z.string().max(500).optional(),
   variables: z.array(z.object({
@@ -138,6 +151,11 @@ export function sanitizeCriterionData(data: any): any {
     source: data.source ? sanitizeInputString(data.source) : undefined,
     method: data.method ? sanitizeInputString(data.method) : undefined,
     dir: data.dir || undefined,
+    scoringSource: data.scoringSource || 'supervisor',
+    misMetricKey: data.misMetricKey || undefined,
+    customMetricField: data.customMetricField ? sanitizeInputString(data.customMetricField) : undefined,
+    autoPopulate: data.autoPopulate !== undefined ? Boolean(data.autoPopulate) : true,
+    misTargetValue: typeof data.misTargetValue === 'number' ? data.misTargetValue : (data.misTargetValue ? Number(data.misTargetValue) : undefined),
     calculationType: data.calculationType || undefined,
     formulaExpression: data.formulaExpression ? sanitizeInputString(data.formulaExpression) : undefined,
     unit: data.unit ? sanitizeInputString(data.unit) : undefined,

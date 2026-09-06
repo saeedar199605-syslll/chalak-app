@@ -8,6 +8,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Calculator, 
   Sparkles, 
@@ -348,8 +349,10 @@ export default function KpiFormulaEngineModal({
     setTimeout(() => setFeedback(null), 4000);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in" dir="rtl">
+  if (!isOpen) return null;
+
+  return typeof document !== 'undefined' ? createPortal(
+    <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in" dir="rtl">
       <div className={`relative w-full max-w-5xl rounded-3xl border shadow-2xl overflow-hidden my-6 flex flex-col max-h-[92vh] ${
         theme === 'dark' ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-800'
       }`}>
@@ -1052,6 +1055,7 @@ export default function KpiFormulaEngineModal({
         </div>
 
       </div>
-    </div>
-  );
+    </div>,
+    document.body
+  ) : null;
 }

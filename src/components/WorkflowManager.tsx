@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   GitFork,
   ArrowRight,
@@ -47,9 +48,12 @@ import {
   Grid3X3,
   Sliders,
   UserX,
-  Calendar
+  Calendar,
+  CheckSquare,
+  Square
 } from 'lucide-react';
 import { downloadWorkflowCalendarICS, DEFAULT_WORKFLOW_DEADLINES } from '../utils/calendarExport';
+import { db } from '../utils/db';
 import {
   Employee,
   Evaluation,
@@ -75,6 +79,8 @@ interface WorkflowManagerProps {
   profiles: JobProfile[];
   criteria: Criterion[];
   onUpdateEvaluation: (id: string, updatedEv: Evaluation) => void;
+  onBulkUpdateEvaluations?: (updatedEvaluations: Evaluation[]) => void;
+  onUpdateEmployees?: (updatedEmployees: Employee[]) => void;
   onSelectEvaluation?: (id: string) => void;
   theme: 'dark' | 'light';
 }
@@ -86,6 +92,8 @@ export default function WorkflowManager({
   profiles,
   criteria,
   onUpdateEvaluation,
+  onBulkUpdateEvaluations,
+  onUpdateEmployees,
   onSelectEvaluation,
   theme
 }: WorkflowManagerProps) {
@@ -103,6 +111,15 @@ export default function WorkflowManager({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUnit, setSelectedUnit] = useState<string>('all');
   const [nineBoxCategoryFilter, setNineBoxCategoryFilter] = useState<string>('all');
+
+  // Optimistic local state for immediate reconciliation without full page reload
+  const [localEvaluations, setLocalEvaluations] = useState<Evaluation[]>(evaluations);
+  useEffect(() => {
+    setLocalEvaluations(evaluations);
+  }, [evaluations]);
+
+  // Multi-select state for bulk actions
+  const [selectedEvalIds, setSelectedEvalIds] = useState<string[]>([]);
 
   // Route rules state
   const [routeRules, setRouteRules] = useState<EvaluationRouteRule[]>(() => {
@@ -304,7 +321,7 @@ export default function WorkflowManager({
 
   // Normalize evaluations with stages and resolved assignees
   const normalizedEvaluations = useMemo(() => {
-    return evaluations.map(ev => {
+    return localEvaluations.map(ev => {
       const emp = employees.find(e => e.id === ev.empId);
       let stage: WorkflowStageKey = ev.stage || 'self_review';
       if (!ev.stage) {
@@ -344,7 +361,7 @@ export default function WorkflowManager({
         }
       };
     });
-  }, [evaluations, employees]);
+  }, [localEvaluations, employees]);
 
   // SLA days calculator (mock dynamic based on creation/history)
   const calculateSlaDays = (ev: Evaluation) => {
@@ -486,6 +503,12 @@ export default function WorkflowManager({
       history: updatedHistory
     };
 
+    // Optimistic local state update + persistent save
+    const nextLocal = localEvaluations.map(e => e.id === evalItem.id ? updatedEval : e);
+    setLocalEvaluations(nextLocal);
+    db.saveEvaluations(nextLocal);
+    db.syncToCloudNow();
+
     onUpdateEvaluation(evalItem.id, updatedEval);
     displayToast(`پرونده با موفقیت به مرحله «${WORKFLOW_STAGES[targetStage]?.label}» و کارتابل «${resolvedNextAssignee.name}» منتقل شد.`, 'success');
 
@@ -507,6 +530,158 @@ export default function WorkflowManager({
       case 'appealed': return 'feedback_meeting';
       default: return 'completed';
     }
+  };
+
+  // Optimistic Apply Grouped Advance for selected items (No page reload)
+  const handleApplyGroupedAdvance = () => {
+    if (selectedEvalIds.length === 0) return;
+
+    const timestamp = new Intl.DateTimeFormat('fa-IR', {
+      dateStyle: 'short',
+      timeStyle: 'medium'
+    }).format(new Date());
+
+    const updatedEvals: Evaluation[] = [];
+    const nextLocalEvaluations = localEvaluations.map(ev => {
+      if (!selectedEvalIds.includes(ev.id)) return ev;
+      if (ev.stage === 'completed') return ev;
+
+      const targetStage = getNextStandardStage(ev.stage);
+      const stageInfo = WORKFLOW_STAGES[targetStage];
+      const fromStage = ev.stage;
+      const logEntry: WorkflowTransitionLog = {
+        id: `trans-bulk-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        fromStage,
+        toStage: targetStage,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        actorRole: currentUser.role,
+        action: 'advance',
+        timestamp,
+        comment: `اعمال گروهی (Batch Action): انتقال به ${stageInfo?.label || targetStage}`
+      };
+
+      const emp = employees.find(e => e.id === ev.empId);
+      const resolvedNextAssignee = resolveCurrentAssignee({ ...ev, stage: targetStage }, emp);
+
+      let newStatus = ev.status;
+      if (targetStage === 'completed') {
+        newStatus = 'locked';
+      } else if (targetStage === 'hr_approval' || targetStage === 'calibration_review') {
+        newStatus = 'calibrated';
+      } else {
+        newStatus = 'draft';
+      }
+
+      const updated: Evaluation = {
+        ...ev,
+        stage: targetStage,
+        status: newStatus,
+        currentAssigneeId: resolvedNextAssignee.id,
+        currentAssigneeName: resolvedNextAssignee.name,
+        currentAssigneeRole: resolvedNextAssignee.role,
+        history: [logEntry, ...(ev.history || [])]
+      };
+
+      updatedEvals.push(updated);
+      return updated;
+    });
+
+    const affectedCount = updatedEvals.length;
+    if (affectedCount === 0) {
+      displayToast('هیچ پرونده واجد شرایطی جهت انتقال به گام بعد انتخاب نشده است.', 'warning');
+      return;
+    }
+
+    // 1. Immediate optimistic UI reconciliation: component stays mounted and interactive without page re-render
+    setLocalEvaluations(nextLocalEvaluations);
+    setSelectedEvalIds([]);
+
+    // 2. Persist to storage & cloud immediately
+    db.saveEvaluations(nextLocalEvaluations);
+    db.syncToCloudNow();
+
+    // 3. Notify parent
+    if (onBulkUpdateEvaluations) {
+      onBulkUpdateEvaluations(nextLocalEvaluations);
+    } else {
+      updatedEvals.forEach(e => onUpdateEvaluation(e.id, e));
+    }
+
+    displayToast(`انتقال گروهی گام بعد بر روی ${affectedCount} پرونده با موفقیت و به‌صورت زنده اعمال گردید.`, 'success');
+  };
+
+  // Optimistic Apply Grouped for target stage
+  const handleApplyGroupedStage = (targetStage: WorkflowStageKey, actionTitle: string) => {
+    if (selectedEvalIds.length === 0) return;
+
+    const timestamp = new Intl.DateTimeFormat('fa-IR', {
+      dateStyle: 'short',
+      timeStyle: 'medium'
+    }).format(new Date());
+
+    const updatedEvals: Evaluation[] = [];
+    const nextLocalEvaluations = localEvaluations.map(ev => {
+      if (!selectedEvalIds.includes(ev.id)) return ev;
+
+      const stageInfo = WORKFLOW_STAGES[targetStage];
+      const fromStage = ev.stage;
+      const logEntry: WorkflowTransitionLog = {
+        id: `trans-bulk-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        fromStage,
+        toStage: targetStage,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        actorRole: currentUser.role,
+        action: 'advance',
+        timestamp,
+        comment: `اعمال گروهی (Batch Action): انتقال از ${WORKFLOW_STAGES[fromStage]?.label || fromStage} به ${stageInfo?.label || targetStage}`
+      };
+
+      const emp = employees.find(e => e.id === ev.empId);
+      const resolvedNextAssignee = resolveCurrentAssignee({ ...ev, stage: targetStage }, emp);
+
+      let newStatus = ev.status;
+      if (targetStage === 'completed') {
+        newStatus = 'locked';
+      } else if (targetStage === 'hr_approval' || targetStage === 'calibration_review') {
+        newStatus = 'calibrated';
+      } else {
+        newStatus = 'draft';
+      }
+
+      const updated: Evaluation = {
+        ...ev,
+        stage: targetStage,
+        status: newStatus,
+        currentAssigneeId: resolvedNextAssignee.id,
+        currentAssigneeName: resolvedNextAssignee.name,
+        currentAssigneeRole: resolvedNextAssignee.role,
+        history: [logEntry, ...(ev.history || [])]
+      };
+
+      updatedEvals.push(updated);
+      return updated;
+    });
+
+    const affectedCount = updatedEvals.length;
+
+    // 1. Immediate optimistic UI reconciliation
+    setLocalEvaluations(nextLocalEvaluations);
+    setSelectedEvalIds([]);
+
+    // 2. Persist to storage & cloud immediately
+    db.saveEvaluations(nextLocalEvaluations);
+    db.syncToCloudNow();
+
+    // 3. Notify parent
+    if (onBulkUpdateEvaluations) {
+      onBulkUpdateEvaluations(nextLocalEvaluations);
+    } else {
+      updatedEvals.forEach(e => onUpdateEvaluation(e.id, e));
+    }
+
+    displayToast(`عملیات گروهی «${actionTitle}» بر روی ${affectedCount} پرونده با موفقیت و به‌صورت زنده اعمال گردید.`, 'success');
   };
 
   // Quick Action Handler
@@ -677,8 +852,10 @@ export default function WorkflowManager({
     });
 
     localStorage.setItem('pe_employees', JSON.stringify(updatedList));
-    displayToast(`ماتریس انتساب سرپرستان و تاییدکنندگان برای پرسنل واحد ${batchAssignUnit === 'all' ? 'کل سازمان' : batchAssignUnit} با موفقیت به‌روزرسانی شد. صفحه بازخوانی می‌شود...`, 'success');
-    setTimeout(() => window.location.reload(), 1200);
+    if (onUpdateEmployees) {
+      onUpdateEmployees(updatedList);
+    }
+    displayToast(`ماتریس انتساب سرپرستان و تاییدکنندگان برای پرسنل واحد ${batchAssignUnit === 'all' ? 'کل سازمان' : batchAssignUnit} با موفقیت به‌روزرسانی شد.`, 'success');
   };
 
   return (
@@ -819,7 +996,7 @@ export default function WorkflowManager({
       </div>
 
       {/* --- NAVIGATION TABS --- */}
-      <div className="flex border-b border-slate-800 gap-2 pb-2 overflow-x-auto">
+      <div className="sticky top-0 z-30 flex border-b border-slate-800 gap-2 p-2 overflow-x-auto bg-slate-900/95 backdrop-blur-xl rounded-2xl shadow-xl">
         <button
           onClick={() => setActiveTab('my_tasks')}
           className={`flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-xs transition-all shrink-0 ${
@@ -1091,7 +1268,7 @@ export default function WorkflowManager({
       {activeTab === 'all_workflows' && (
         <div className="space-y-4">
           {/* Filters Bar */}
-          <div className="bg-slate-900/70 border border-slate-800 p-4 rounded-3xl flex flex-wrap items-center justify-between gap-3">
+          <div className="sticky top-16 z-20 bg-slate-900/95 backdrop-blur-xl border border-slate-800 p-4 rounded-3xl flex flex-wrap items-center justify-between gap-3 shadow-lg">
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative">
                 <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
@@ -1138,12 +1315,91 @@ export default function WorkflowManager({
             </div>
           </div>
 
+          {/* Sticky Grouped Action Bar for Batch Operations */}
+          {selectedEvalIds.length > 0 && (
+            <div className="sticky top-32 z-25 bg-slate-900/95 backdrop-blur-xl border-2 border-teal-500/60 shadow-2xl rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 text-slate-100 my-2 animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center gap-3">
+                <span className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-300 flex items-center justify-center font-bold text-sm font-mono border border-teal-500/40">
+                  {selectedEvalIds.length}
+                </span>
+                <div>
+                  <div className="font-bold text-xs text-slate-100 flex items-center gap-1.5">
+                    <span>پرونده ارزیابی انتخاب‌شده جهت اقدام گروهی</span>
+                    <span className="px-2 py-0.5 bg-teal-500/20 text-teal-300 rounded-full text-[10px] font-bold">Optimistic Live Update</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400">تغییر وضعیت آنی و اعمال دسته‌جمعی بدون رفرش صفحه</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Apply Grouped: Advance to Next Stage */}
+                <button
+                  type="button"
+                  onClick={handleApplyGroupedAdvance}
+                  className="px-3.5 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-black rounded-xl text-xs transition flex items-center gap-1.5 shadow-lg shadow-teal-500/20 cursor-pointer"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  <span>انتقال گروهی به گام بعد (Apply Grouped)</span>
+                </button>
+
+                {/* Apply Grouped: Move to Calibration */}
+                <button
+                  type="button"
+                  onClick={() => handleApplyGroupedStage('calibration_review', 'ارسال به کالیبراسیون')}
+                  className="px-3.5 py-2 bg-purple-600/30 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-500/40 font-bold rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Scale className="w-4 h-4" />
+                  <span>ارسال گروهی به کالیبراسیون</span>
+                </button>
+
+                {/* Apply Grouped: HR Final Approval */}
+                <button
+                  type="button"
+                  onClick={() => handleApplyGroupedStage('completed', 'تصویب و تکمیل نهایی')}
+                  className="px-3.5 py-2 bg-emerald-600/30 hover:bg-emerald-600 text-emerald-200 hover:text-white border border-emerald-500/40 font-bold rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <CheckCheck className="w-4 h-4" />
+                  <span>تصویب و تایید نهایی گروهی</span>
+                </button>
+
+                {/* Deselect All */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedEvalIds([])}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 rounded-xl text-xs transition cursor-pointer"
+                >
+                  لغو انتخاب ({selectedEvalIds.length})
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Full Table */}
           <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
             <div className="overflow-x-auto">
               <table className="w-full text-right text-xs">
-                <thead>
-                  <tr className="bg-slate-950/80 text-slate-400 border-b border-slate-800 font-bold">
+                <thead className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur-md">
+                  <tr className="text-slate-400 border-b border-slate-800 font-bold">
+                    <th className="py-3.5 px-3 w-10 text-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedEvalIds.length === allFilteredEvaluations.length) {
+                            setSelectedEvalIds([]);
+                          } else {
+                            setSelectedEvalIds(allFilteredEvaluations.map(e => e.id));
+                          }
+                        }}
+                        className="text-slate-400 hover:text-teal-400 p-1 transition cursor-pointer"
+                        title="انتخاب همه پرونده‌های این لیست"
+                      >
+                        {selectedEvalIds.length > 0 && selectedEvalIds.length === allFilteredEvaluations.length ? (
+                          <CheckSquare className="w-4 h-4 text-teal-400" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-500" />
+                        )}
+                      </button>
+                    </th>
                     <th className="py-3.5 px-4">همکار و کد پرسنلی</th>
                     <th className="py-3.5 px-4">عنوان شغلی و واحد</th>
                     <th className="py-3.5 px-4">سرپرست مستقیم ارزیاب</th>
@@ -1165,7 +1421,24 @@ export default function WorkflowManager({
                     const sla = calculateSlaDays(ev);
 
                     return (
-                      <tr key={ev.id} className="hover:bg-slate-800/30 transition-colors">
+                      <tr key={ev.id} className={`hover:bg-slate-800/30 transition-colors ${selectedEvalIds.includes(ev.id) ? 'bg-teal-500/5' : ''}`}>
+                        <td className="py-3.5 px-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedEvalIds(prev =>
+                                prev.includes(ev.id) ? prev.filter(x => x !== ev.id) : [...prev, ev.id]
+                              );
+                            }}
+                            className="text-slate-400 hover:text-teal-400 p-1 transition cursor-pointer"
+                          >
+                            {selectedEvalIds.includes(ev.id) ? (
+                              <CheckSquare className="w-4 h-4 text-teal-400" />
+                            ) : (
+                              <Square className="w-4 h-4 text-slate-600" />
+                            )}
+                          </button>
+                        </td>
                         <td className="py-3.5 px-4">
                           <div className="font-bold text-slate-100">{emp?.name || 'نامشخص'}</div>
                           <div className="text-[10px] text-slate-400 font-mono">{emp?.code}</div>
@@ -1728,7 +2001,7 @@ export default function WorkflowManager({
                               const stored = JSON.parse(localStorage.getItem('pe_employees') || '[]');
                               const updatedList = stored.map((item: Employee) => item.id === emp.id ? updatedEmp : item);
                               localStorage.setItem('pe_employees', JSON.stringify(updatedList));
-                              window.location.reload();
+                              if (onUpdateEmployees) onUpdateEmployees(updatedList);
                             }}
                             className="bg-slate-950 border border-slate-800 text-xs text-teal-300 rounded-xl px-3 py-1.5 focus:outline-none focus:border-teal-500 w-full max-w-xs"
                           >
@@ -1747,7 +2020,7 @@ export default function WorkflowManager({
                               const stored = JSON.parse(localStorage.getItem('pe_employees') || '[]');
                               const updatedList = stored.map((item: Employee) => item.id === emp.id ? updatedEmp : item);
                               localStorage.setItem('pe_employees', JSON.stringify(updatedList));
-                              window.location.reload();
+                              if (onUpdateEmployees) onUpdateEmployees(updatedList);
                             }}
                             className="bg-slate-950 border border-slate-800 text-xs text-cyan-300 rounded-xl px-3 py-1.5 focus:outline-none focus:border-cyan-500 w-full max-w-xs"
                           >
@@ -1766,7 +2039,7 @@ export default function WorkflowManager({
                               const stored = JSON.parse(localStorage.getItem('pe_employees') || '[]');
                               const updatedList = stored.map((item: Employee) => item.id === emp.id ? updatedEmp : item);
                               localStorage.setItem('pe_employees', JSON.stringify(updatedList));
-                              window.location.reload();
+                              if (onUpdateEmployees) onUpdateEmployees(updatedList);
                             }}
                             className="bg-slate-950 border border-slate-800 text-xs text-indigo-300 rounded-xl px-3 py-1.5 focus:outline-none focus:border-indigo-500 w-full max-w-xs"
                           >
@@ -1844,9 +2117,9 @@ export default function WorkflowManager({
       {/* ========================================================================= */}
       {/* MODAL 1: INTERACTIVE VISUAL WORKFLOW CANVAS & ROUTE INSPECTOR */}
       {/* ========================================================================= */}
-      {selectedEvalForVisualModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in" dir="rtl">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-4xl max-h-[90vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-100">
+      {selectedEvalForVisualModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-4xl max-h-[90vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-100 my-auto">
             {/* Modal Header */}
             <div className="p-6 border-b border-slate-800 flex items-center justify-between">
               <div>
@@ -1860,7 +2133,7 @@ export default function WorkflowManager({
               </div>
               <button
                 onClick={() => setSelectedEvalForVisualModal(null)}
-                className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition"
+                className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1923,15 +2196,16 @@ export default function WorkflowManager({
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================= */}
       {/* MODAL 2: REASSIGN / ACTION / OVERRIDE MODAL */}
       {/* ========================================================================= */}
-      {selectedEvalForAction && actionType && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in" dir="rtl">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 text-slate-100 space-y-4">
+      {selectedEvalForAction && actionType && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 text-slate-100 space-y-4 my-auto">
             <h3 className="text-base font-black text-slate-100 flex items-center gap-2">
               {actionType === 'reassign' && <UserPlus className="w-5 h-5 text-indigo-400" />}
               {actionType === 'override' && <Settings className="w-5 h-5 text-purple-400" />}
@@ -1991,7 +2265,7 @@ export default function WorkflowManager({
                   setSelectedEvalForAction(null);
                   setActionType(null);
                 }}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white cursor-pointer"
               >
                 انصراف
               </button>
@@ -2006,27 +2280,28 @@ export default function WorkflowManager({
                     executeStageTransition(selectedEvalForAction, 'rejected', 'reject_to_supervisor', actionComment || 'عودت داده شده جهت بازنگری');
                   }
                 }}
-                className="px-5 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-black rounded-xl text-xs transition"
+                className="px-5 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer"
               >
                 تایید و اعمال
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================= */}
       {/* MODAL 3: IDP PLANNER MODAL */}
       {/* ========================================================================= */}
-      {idpModalEval && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in" dir="rtl">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-3xl shadow-2xl p-6 text-slate-100 space-y-5">
+      {idpModalEval && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-3xl shadow-2xl p-6 text-slate-100 space-y-5 my-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="text-base font-black text-slate-100 flex items-center gap-2">
                 <Target className="w-5 h-5 text-teal-400" />
                 <span>برنامه توانمندسازی و توسعه فردی (IDP): {employees.find(e => e.id === idpModalEval.empId)?.name}</span>
               </h3>
-              <button onClick={() => setIdpModalEval(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setIdpModalEval(null)} className="text-slate-400 hover:text-white cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -2096,26 +2371,27 @@ export default function WorkflowManager({
             </div>
 
             <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
-              <button onClick={() => setIdpModalEval(null)} className="px-4 py-2 text-xs font-bold text-slate-400">
+              <button onClick={() => setIdpModalEval(null)} className="px-4 py-2 text-xs font-bold text-slate-400 cursor-pointer">
                 بستن
               </button>
               <button
                 onClick={handleAddIdpItem}
-                className="px-5 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-black rounded-xl text-xs transition"
+                className="px-5 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer"
               >
                 ثبت در پرونده شاغل
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================= */}
       {/* MODAL 4: APPEAL REVIEW / SUBMIT MODAL */}
       {/* ========================================================================= */}
-      {appealModalEval && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in" dir="rtl">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 text-slate-100 space-y-4">
+      {appealModalEval && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 text-slate-100 space-y-4 my-auto">
             <h3 className="text-base font-black text-slate-100 flex items-center gap-2">
               <Scale className="w-5 h-5 text-orange-400" />
               <span>
@@ -2180,18 +2456,19 @@ export default function WorkflowManager({
             )}
 
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
-              <button onClick={() => setAppealModalEval(null)} className="px-4 py-2 text-xs font-bold text-slate-400">
+              <button onClick={() => setAppealModalEval(null)} className="px-4 py-2 text-xs font-bold text-slate-400 cursor-pointer">
                 انصراف
               </button>
               <button
                 onClick={currentUser.role === 'admin' ? handleReviewAppeal : handleSubmitAppeal}
-                className="px-5 py-2 bg-orange-500 hover:bg-orange-400 text-slate-950 font-black rounded-xl text-xs transition"
+                className="px-5 py-2 bg-orange-500 hover:bg-orange-400 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer"
               >
                 {currentUser.role === 'admin' ? 'ثبت و ابلاغ رای کمیته' : 'ارسال به کمیته تجدیدنظر'}
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

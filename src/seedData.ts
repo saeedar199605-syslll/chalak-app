@@ -15,7 +15,10 @@ export const SEED_CRITERIA: Criterion[] = [
     def: 'درصد دستیابی به اهداف تولید هفتگی و ماهانه تعیین شده در سیستم WMS/MES',
     source: 'گزارش سیستم MES',
     method: 'نسبت کل تولید تایید شده به هدف تعیین شده (درصد)',
-    dir: 'more'
+    dir: 'more',
+    scoringSource: 'mis',
+    misMetricKey: 'efficiency',
+    autoPopulate: true
   },
   {
     id: 'crit-k2',
@@ -25,7 +28,10 @@ export const SEED_CRITERIA: Criterion[] = [
     def: 'درصد قطعات ضایع شده یا نیازمند دوباره‌کاری از کل تولید خط',
     source: 'ثبت کارپوشه QC / ضایعات ایستگاه',
     method: 'نسبت اقلام رد شده به کل اقلام خروجی (معکوس)',
-    dir: 'less'
+    dir: 'less',
+    scoringSource: 'mis',
+    misMetricKey: 'scrap_rate',
+    autoPopulate: true
   },
   {
     id: 'crit-k3',
@@ -35,7 +41,10 @@ export const SEED_CRITERIA: Criterion[] = [
     def: 'میزان بهره‌وری، دسترس‌پذیری و کیفیت ماشین‌آلات در زمان کارکرد',
     source: 'لاگ دیجیتال ماشین (MES)',
     method: 'درصد تحقق بهره‌وری کل خط (درصد)',
-    dir: 'more'
+    dir: 'more',
+    scoringSource: 'mis',
+    misMetricKey: 'efficiency',
+    autoPopulate: true
   },
   {
     id: 'crit-k4',
@@ -45,7 +54,10 @@ export const SEED_CRITERIA: Criterion[] = [
     def: 'مجموع زمان توقفات خط ناشی از خطای اپراتوری، دیرکرد مواد یا خطای تنظیمات',
     source: 'ثبت سیستم مانیتورینگ توقفات خط',
     method: 'معکوس مجموع ساعات توقف غیرمجاز در ماه',
-    dir: 'less'
+    dir: 'less',
+    scoringSource: 'mis',
+    misMetricKey: 'downtime',
+    autoPopulate: true
   },
   {
     id: 'crit-k5',
@@ -55,7 +67,9 @@ export const SEED_CRITERIA: Criterion[] = [
     def: 'درصد انجام ممیزی‌ها و تست‌های محصول طبق چک‌لیست مدون کنترل کیفیت',
     source: 'کارتابل کنترل کیفیت (QC Log)',
     method: 'تعداد بازرسی‌های ثبت شده به برنامه‌ریزی مصوب',
-    dir: 'more'
+    dir: 'more',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   },
   {
     id: 'crit-k6',
@@ -65,7 +79,9 @@ export const SEED_CRITERIA: Criterion[] = [
     def: 'میانگین زمان سپری شده برای اعلام نظر فنی در خصوص محموله‌های بلاتکلیف',
     source: 'سامانه یکپارچه انبار و کیفیت',
     method: 'درصد تصمیم‌گیری‌های انجام شده زیر استاندارد زمانی ۶۰ دقیقه',
-    dir: 'more'
+    dir: 'more',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   },
   {
     id: 'crit-k7',
@@ -75,7 +91,10 @@ export const SEED_CRITERIA: Criterion[] = [
     def: 'مدت زمان خاموشی دستگاه برای تغییر قالب، تعویض ابزار یا تنظیم سایز جدید تولید',
     source: 'لاگ عملیاتی راه‌اندازان تولید',
     method: 'معکوس میانگین زمان تعویض قالب در ماه (دقیقه)',
-    dir: 'less'
+    dir: 'less',
+    scoringSource: 'mis',
+    misMetricKey: 'downtime',
+    autoPopulate: true
   },
 
   // کیفیت و انطباق (Q)
@@ -86,7 +105,9 @@ export const SEED_CRITERIA: Criterion[] = [
     name: 'رعایت دقیق استانداردهای SOP',
     def: 'میزان انطباق گام‌های کاری با دستورالعمل‌های استاندارد عملیاتی مصوب خط',
     source: 'نتایج ممیزی دوره‌ای سرپرست براساس چک‌لیست BARS',
-    method: 'ممیزی تصادفی ماهیانه با سنجه ۵ سطحی رفتاری'
+    method: 'ممیزی تصادفی ماهیانه با سنجه ۵ سطحی رفتاری',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   },
   {
     id: 'crit-q2',
@@ -95,7 +116,9 @@ export const SEED_CRITERIA: Criterion[] = [
     name: 'صحت و کامل‌بودن ثبت داده‌های کیفی',
     def: 'دقت ثبت سوابق کیفی، ابعاد، عیوب و نتایج در سامانه یکپارچه سازمان بدون خطای اعتبارسنجی',
     source: 'بازرسی نمونه‌ای پرونده‌های کنترل فرآیند',
-    method: 'چک‌لیست تطبیقی سوابق ثبت‌شده'
+    method: 'چک‌لیست تطبیقی سوابق ثبت‌شده',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   },
   {
     id: 'crit-q3',
@@ -104,7 +127,9 @@ export const SEED_CRITERIA: Criterion[] = [
     name: 'رعایت دستورالعمل فنی تنظیمات اولیه',
     def: 'دقت در اعمال پارامترهای فنی کالیبراسیون دستگاه طبق کارت مشخصات محصول',
     source: 'لاگ فنی راه‌اندازی قالب',
-    method: 'چک‌لیست راه‌اندازی بدون انحراف پارامتری'
+    method: 'چک‌لیست راه‌اندازی بدون انحراف پارامتری',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   },
   {
     id: 'crit-q4',
@@ -113,7 +138,9 @@ export const SEED_CRITERIA: Criterion[] = [
     name: 'رعایت اصول نظام آراستگی (5S)',
     def: 'پاکیزه‌سازی، سازماندهی، انضباط و مرتب‌سازی ابزار و ایستگاه کاری قبل، حین و بعد از شیفت',
     source: 'امتیاز ممیزی هفتگی واحد HSE & 5S',
-    method: 'میانگین نمره ممیزی‌های تصادفی ۵اس'
+    method: 'میانگین نمره ممیزی‌های تصادفی ۵اس',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   },
 
   // ایمنی (S) - الزامی
@@ -124,7 +151,9 @@ export const SEED_CRITERIA: Criterion[] = [
     name: 'رعایت اصول ایمنی، بهداشت و موازین HSE',
     def: 'استفاده مستمر از تجهیزات حفاظت فردی (کلاه، دستکش، عینک) و گزارش‌دهی شرایط ناایمن و شبه‌حوادث',
     source: 'سیستم ثبت تخلفات ایمنی / چک‌لیست ناظر HSE',
-    method: 'ارزیابی رفتاری بر اساس پرونده عدم‌انطباق (HSE Incident Rate)'
+    method: 'ارزیابی رفتاری بر اساس پرونده عدم‌انطباق (HSE Incident Rate)',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   },
 
   // رفتارهای شایستگی (B)
@@ -134,8 +163,11 @@ export const SEED_CRITERIA: Criterion[] = [
     cat: 'B',
     name: 'نظم، تعهد کاری و انضباط حضور',
     def: 'کارت‌زنی دقیق، حضور به موقع در ایستگاه کاری و پاسخگویی سریع در تعویض شیفت',
-    source: 'گزارش سیستم حضور و غیاب',
-    method: 'امتیازدهی رفتاری با کسر نمره بابت تاخیرهای غیرموجه'
+    source: 'گزارش سیستم حضور و غیاب کسری',
+    method: 'سنجش دقایق تاخیر و غیبت با کسر نمره',
+    scoringSource: 'kasra',
+    misMetricKey: 'attendance_delay',
+    autoPopulate: true
   },
   {
     id: 'crit-b2',
@@ -144,7 +176,9 @@ export const SEED_CRITERIA: Criterion[] = [
     name: 'مسئولیت‌پذیری و دقت فنی در انجام وظایف',
     def: 'احساس مالکیت نسبت به ایستگاه، مراقبت اصولی از ماشین‌آلات و پاسخگویی مسئولانه در زمان رخداد خطا',
     source: 'فرم ارزیابی ۳۶۰ درجه و نظرسنجی همکاران',
-    method: 'سنجش شاخص‌های تعهد و پاسخگویی رفتاری'
+    method: 'سنجش شاخص‌های تعهد و پاسخگویی رفتاری',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   },
 
   // رهبری و مدیریت (L)
@@ -155,7 +189,9 @@ export const SEED_CRITERIA: Criterion[] = [
     name: 'مربیگری و توسعه مهارت‌های تیم',
     def: 'تلاش فعالانه برای آموزش اپراتورهای تازه‌کار و ارتقای سطح دانش فنی اعضای خط تولید',
     source: 'پرونده آموزش‌های ثبت‌شده درون‌واحدی',
-    method: 'تعداد ساعات آموزش ارائه شده و پیشرفت مهارت کارآموزان'
+    method: 'تعداد ساعات آموزش ارائه شده و پیشرفت مهارت کارآموزان',
+    scoringSource: 'supervisor',
+    autoPopulate: false
   }
 ];
 

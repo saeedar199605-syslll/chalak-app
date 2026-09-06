@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Target, 
   Users, 
@@ -23,7 +24,10 @@ import {
   Lock, 
   Check, 
   X,
-  FileText
+  FileText,
+  Edit2,
+  Trash2,
+  Save
 } from 'lucide-react';
 import { 
   Employee, 
@@ -187,6 +191,49 @@ export default function LatticePerformanceHub({
         confidence: overallConf
       };
     }));
+  };
+
+  // OKR Edit and Delete states
+  const [editingOkr, setEditingOkr] = useState<OKRGoal | null>(null);
+  const [deletingOkr, setDeletingOkr] = useState<OKRGoal | null>(null);
+
+  const handleSaveEditedOkr = (updated: OKRGoal) => {
+    let overallProgress = updated.progress;
+    let overallConf = updated.confidence;
+    if (updated.keyResults && updated.keyResults.length > 0) {
+      const sum = updated.keyResults.reduce((acc, kr) => {
+        const range = kr.targetValue - kr.startValue;
+        if (range === 0) return acc + 100;
+        return acc + Math.min(100, Math.max(0, ((kr.currentValue - kr.startValue) / range) * 100));
+      }, 0);
+      overallProgress = Math.round(sum / updated.keyResults.length);
+      if (overallProgress >= 100) overallConf = 'completed';
+      else if (overallProgress < 50) overallConf = 'behind';
+      else if (overallProgress < 75) overallConf = 'at_risk';
+      else overallConf = 'on_track';
+    }
+
+    const finalUpdated: OKRGoal = {
+      ...updated,
+      progress: overallProgress,
+      confidence: overallConf
+    };
+
+    const nextOkrs = okrs.map(g => g.id === finalUpdated.id ? finalUpdated : g);
+    setOkrs(nextOkrs);
+    try {
+      localStorage.setItem('pe_lattice_okrs', JSON.stringify(nextOkrs));
+    } catch {}
+    setEditingOkr(null);
+  };
+
+  const handleDeleteOkr = (goalId: string) => {
+    const nextOkrs = okrs.filter(g => g.id !== goalId);
+    setOkrs(nextOkrs);
+    try {
+      localStorage.setItem('pe_lattice_okrs', JSON.stringify(nextOkrs));
+    } catch {}
+    setDeletingOkr(null);
   };
 
   // Toggle Talking Point in 1-on-1
@@ -596,19 +643,50 @@ export default function LatticePerformanceHub({
                     </p>
                   </div>
 
-                  {/* Goal Progress Bar */}
-                  <div className="flex items-center gap-4 min-w-[200px] justify-between lg:justify-end">
+                  {/* Goal Progress Bar & Actions */}
+                  <div className="flex items-center gap-4 min-w-[240px] justify-between lg:justify-end">
                     <div className="space-y-1 text-right">
                       <div className={`text-xs font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>میزان تحقق کلی</div>
                       <div className="text-2xl font-black font-mono text-indigo-600 dark:text-indigo-400">{goal.progress}٪</div>
                     </div>
-                    <div className={`w-28 h-2.5 rounded-full overflow-hidden ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'}`}>
+                    <div className={`w-24 h-2.5 rounded-full overflow-hidden ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'}`}>
                       <div 
                         className={`h-full rounded-full transition-all duration-500 ${
                           goal.progress >= 80 ? 'bg-emerald-500' : goal.progress >= 50 ? 'bg-indigo-500' : 'bg-amber-500'
                         }`}
                         style={{ width: `${goal.progress}%` }}
                       />
+                    </div>
+
+                    {/* Action buttons: Edit & Delete */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setEditingOkr(JSON.parse(JSON.stringify(goal)))}
+                        className={`p-2 rounded-xl border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                          theme === 'dark' 
+                            ? 'bg-slate-800/80 hover:bg-indigo-900/40 border-slate-700 text-indigo-300' 
+                            : 'bg-indigo-50 hover:bg-indigo-100 border-indigo-200 text-indigo-700'
+                        }`}
+                        title="ویرایش کامل هدف OKR و سنجه‌ها"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">ویرایش</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setDeletingOkr(goal)}
+                        className={`p-2 rounded-xl border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                          theme === 'dark' 
+                            ? 'bg-slate-800/80 hover:bg-rose-900/40 border-slate-700 text-rose-400' 
+                            : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                        }`}
+                        title="حذف هدف OKR"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">حذف</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1554,6 +1632,260 @@ export default function LatticePerformanceHub({
             </form>
           </div>
         </div>
+      )}
+
+      {/* DELETE OKR MODAL */}
+      {deletingOkr && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 text-right my-auto">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2.5 bg-rose-500/10 rounded-xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100">حذف هدف OKR</h3>
+                <p className="text-xs text-slate-400">{deletingOkr.level === 'company' ? 'سطح سازمان' : deletingOkr.department}</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed">
+              آیا از حذف هدف <span className="font-bold text-white">«{deletingOkr.title}»</span> و کلیه سنجه‌های کلیدی مرتبط با آن اطمینان دارید؟
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingOkr(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteOkr(deletingOkr.id)}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-rose-600/20 cursor-pointer"
+              >
+                تایید و حذف قطعی
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* EDIT OKR MODAL */}
+      {editingOkr && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className={`relative w-full max-w-2xl rounded-2xl border p-6 shadow-2xl space-y-4 my-auto max-h-[90vh] overflow-y-auto ${
+            theme === 'dark' ? 'bg-slate-900 border-indigo-500/30 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
+          }`}>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-indigo-400">
+                <Edit2 className="w-5 h-5" />
+                <h3 className="text-base font-bold">ویرایش هدف استراتژیک و نتایج کلیدی (OKR)</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingOkr(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold mb-1">عنوان هدف (Objective):</label>
+                <input
+                  type="text"
+                  value={editingOkr.title}
+                  onChange={e => setEditingOkr({ ...editingOkr, title: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">شرح و انگیزه استراتژیک:</label>
+                <textarea
+                  rows={2}
+                  value={editingOkr.description}
+                  onChange={e => setEditingOkr({ ...editingOkr, description: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-bold mb-1">سطح هدف:</label>
+                  <select
+                    value={editingOkr.level}
+                    onChange={e => setEditingOkr({ ...editingOkr, level: e.target.value as any })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="company">کل سازمان</option>
+                    <option value="department">واحد سازمانی</option>
+                    <option value="individual">فردی</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">واحد مربوطه:</label>
+                  <input
+                    type="text"
+                    value={editingOkr.department || ''}
+                    onChange={e => setEditingOkr({ ...editingOkr, department: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">مهلت تحقق:</label>
+                  <input
+                    type="text"
+                    value={editingOkr.dueDate}
+                    onChange={e => setEditingOkr({ ...editingOkr, dueDate: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Key Results editing */}
+              <div className="pt-2 border-t border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-indigo-400">نتایج کلیدی (Key Results):</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newKr: OKRKeyResult = {
+                        id: `kr-${Date.now()}`,
+                        title: 'سنجه کلیدی جدید',
+                        metricType: 'percentage',
+                        startValue: 0,
+                        currentValue: 0,
+                        targetValue: 100,
+                        unit: 'درصد',
+                        ownerName: currentUser.name,
+                        confidence: 'on_track',
+                        lastUpdated: 'همین الان'
+                      };
+                      setEditingOkr({
+                        ...editingOkr,
+                        keyResults: [...editingOkr.keyResults, newKr]
+                      });
+                    }}
+                    className="px-2.5 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-indigo-300 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" /> افزودن سنجه کلیدی
+                  </button>
+                </div>
+
+                <div className="space-y-2 max-h-56 overflow-y-auto p-1">
+                  {editingOkr.keyResults.map((kr, idx) => (
+                    <div key={kr.id} className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <input
+                          type="text"
+                          value={kr.title}
+                          onChange={e => {
+                            const newKrs = [...editingOkr.keyResults];
+                            newKrs[idx] = { ...newKrs[idx], title: e.target.value };
+                            setEditingOkr({ ...editingOkr, keyResults: newKrs });
+                          }}
+                          placeholder="عنوان سنجه کلیدی..."
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newKrs = editingOkr.keyResults.filter((_, i) => i !== idx);
+                            setEditingOkr({ ...editingOkr, keyResults: newKrs });
+                          }}
+                          className="p-1 text-rose-400 hover:text-rose-300 cursor-pointer"
+                          title="حذف این سنجه"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-4 gap-2 text-[11px]">
+                        <div>
+                          <label className="text-slate-400 block text-[10px]">شروع:</label>
+                          <input
+                            type="number"
+                            value={kr.startValue}
+                            onChange={e => {
+                              const newKrs = [...editingOkr.keyResults];
+                              newKrs[idx] = { ...newKrs[idx], startValue: Number(e.target.value) };
+                              setEditingOkr({ ...editingOkr, keyResults: newKrs });
+                            }}
+                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block text-[10px]">فعلی:</label>
+                          <input
+                            type="number"
+                            value={kr.currentValue}
+                            onChange={e => {
+                              const newKrs = [...editingOkr.keyResults];
+                              newKrs[idx] = { ...newKrs[idx], currentValue: Number(e.target.value) };
+                              setEditingOkr({ ...editingOkr, keyResults: newKrs });
+                            }}
+                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block text-[10px]">هدف:</label>
+                          <input
+                            type="number"
+                            value={kr.targetValue}
+                            onChange={e => {
+                              const newKrs = [...editingOkr.keyResults];
+                              newKrs[idx] = { ...newKrs[idx], targetValue: Number(e.target.value) };
+                              setEditingOkr({ ...editingOkr, keyResults: newKrs });
+                            }}
+                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-slate-400 block text-[10px]">واحد:</label>
+                          <input
+                            type="text"
+                            value={kr.unit}
+                            onChange={e => {
+                              const newKrs = [...editingOkr.keyResults];
+                              newKrs[idx] = { ...newKrs[idx], unit: e.target.value };
+                              setEditingOkr({ ...editingOkr, keyResults: newKrs });
+                            }}
+                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingOkr(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveEditedOkr(editingOkr)}
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-600/20 cursor-pointer"
+              >
+                <Save className="w-4 h-4" /> ذخیره تغییرات OKR
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

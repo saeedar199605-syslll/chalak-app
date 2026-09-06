@@ -26,6 +26,23 @@ export interface KpiScoreThresholds {
   score2: number; // e.g. >= 70
 }
 
+export type CriterionScoringSource = 
+  | 'supervisor' // ارزیابی و امتیازدهی مستقیم سرپرست کارگاه / مدیر مستقیم
+  | 'mis'        // ورود خودکار داده‌ها از سامانه تولید و کیفیت MIS/MES
+  | 'kasra'      // ورود خودکار داده‌ها از سامانه حضور و غیاب کسری
+  | 'system';    // محاسبه خودکار سیستمی با موتور فرمول‌ساز KPI
+
+export type MisMetricKey = 
+  | 'efficiency'         // راندمان خط و تحقق برنامه زمان‌بندی تولید
+  | 'scrap_rate'         // نرخ ضایعات و قطعات اسقاطی
+  | 'quality_score'      // نرخ کیفیت و انطباق کیفی قطعات (QC)
+  | 'output_qty'         // تیراژ تولید واقعی
+  | 'downtime'           // توقفات خط و خرابی تجهیزات
+  | 'attendance_delay'   // دقایق تاخیر ورود پرسنل
+  | 'attendance_absence' // روزهای غیبت
+  | 'discipline'         // انضباط اداری و تخلفات
+  | 'custom';            // شاخص سفارشی با نام متغیر آزاد
+
 export interface Criterion {
   id: string;
   code: string;
@@ -35,6 +52,11 @@ export interface Criterion {
   source?: string;
   method?: string;
   dir?: 'more' | 'less'; // 'more' = higher is better, 'less' = lower is better
+  scoringSource?: CriterionScoringSource; // مشخص‌کننده منبع ورود نمره (سرپرست یا MIS یا کسری)
+  misMetricKey?: MisMetricKey;            // کلید متریک متناظر در سامانه MIS
+  customMetricField?: string;             // نام فیلد در فایل اکسل در صورت سفارشی بودن
+  autoPopulate?: boolean;                 // اعمال خودکار نمره هنگام آپلود اکسل
+  misTargetValue?: number;                // هدف عددی تعیین‌شده برای شاخص
   calculationType?: KpiCalculationType;
   formulaExpression?: string;
   variables?: KpiVariableDefinition[];
@@ -92,7 +114,7 @@ export interface WorkflowTransitionLog {
   actorId: string;
   actorName: string;
   actorRole: UserRole;
-  action: 'submit_self' | 'submit_supervisor' | 'submit_peer' | 'approve_calibration' | 'approve_hr' | 'reject_to_supervisor' | 'reject_to_employee' | 'complete_feedback' | 'submit_appeal' | 'resolve_appeal' | 'admin_override' | 'reassign_assignee';
+  action: 'submit_self' | 'submit_supervisor' | 'submit_peer' | 'approve_calibration' | 'approve_hr' | 'reject_to_supervisor' | 'reject_to_employee' | 'complete_feedback' | 'submit_appeal' | 'resolve_appeal' | 'admin_override' | 'reassign_assignee' | 'advance';
   comment?: string;
   targetAssigneeName?: string;
   timestamp: string;
@@ -149,6 +171,12 @@ export interface ScoreItem {
   self: number;  // 1 to 5, or 0 if unrated (Employee)
   peer?: number; // 1 to 5, or 0 if unrated (Peer/360)
   doc?: string;  // Supporting document / justification
+  sourceType?: 'supervisor' | 'mis' | 'kasra' | 'system' | 'auto'; // منبع ثبت نمره فعلی
+  autoPopulated?: boolean; // آیا از اکسل MIS یا کسری به صورت خودکار نشانده شده
+  rawMetricValue?: number | string; // مقدار خام ورودی مانند راندمان ۹۵٪ یا تاخیر ۳۰ دقیقه
+  rawMetricLabel?: string; // برچسب متریک مانند "راندمان خط"
+  overrideNote?: string; // توضیح سرپرست در صورت تغییر دستی نمره خودکار
+  overrideBy?: string;   // نام کاربری که تغییر را انجام داده
 }
 
 export interface UserCustomPermission {

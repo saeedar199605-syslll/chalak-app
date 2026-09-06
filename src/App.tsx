@@ -49,6 +49,7 @@ import {
 import { Criterion, JobProfile, Employee, Evaluation } from './types';
 import { SEED_CRITERIA, SEED_PROFILES, SEED_EMPLOYEES, SEED_EVALUATIONS } from './seedData';
 import { browserNotifications } from './utils/browserNotifications';
+import { db } from './utils/db';
 import { 
   validateEmployeeInput, 
   validateCriterionInput, 
@@ -56,145 +57,22 @@ import {
   clearLegacyAdminSessions 
 } from './utils/validation';
 
-// --- CLOUD SYNC WRAPPER WITH ISOLATED SESSIONS ---
-let syncTimeout: any = null;
-
 export default function App() {
-  const [syncState, setSyncState] = useState<'loading' | 'ready' | 'error'>('loading');
-
-  // Initial cloud state hydration
-  useEffect(() => {
-    fetch('/api/state')
-      .then(res => res.json())
-      .then(data => {
-        if (data && Object.keys(data).length > 0) {
-          for (const [key, value] of Object.entries(data)) {
-            // NEVER sync user session or individual login tokens into global storage
-            if (key === 'pe_current_user' || key === 'pe_session_user') continue;
-            localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
-          }
-        }
-        setSyncState('ready');
-      })
-      .catch(err => {
-        console.error("Cloud Sync Error:", err);
-        setSyncState('ready');
-      });
-  }, []);
-
-  // Periodic polling for collaborative multi-user updates (e.g., changes from other devices)
-  useEffect(() => {
-    if (syncState !== 'ready') return;
-
-    const interval = setInterval(() => {
-      fetch('/api/state')
-        .then(res => res.json())
-        .then(data => {
-          if (data && Object.keys(data).length > 0) {
-            for (const [key, value] of Object.entries(data)) {
-              if (key === 'pe_current_user' || key === 'pe_session_user') continue;
-              const valStr = typeof value === 'string' ? value : JSON.stringify(value);
-              const currentVal = localStorage.getItem(key);
-              if (currentVal !== valStr) {
-                localStorage.setItem(key, valStr);
-                // Dispatch storage event so active React state hooks can re-render if needed
-                window.dispatchEvent(new Event('storage'));
-              }
-            }
-          }
-        })
-        .catch(() => {});
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, [syncState]);
-
-  // Sync outbound changes to Cloudflare / server database
-  useEffect(() => {
-    if (syncState !== 'ready') return;
-
-    const originalSetItem = localStorage.setItem;
-    localStorage.setItem = function(key, value) {
-      originalSetItem.apply(this, arguments);
-      // Only sync global organizational tables, NEVER user sessions
-      if (key && key.startsWith('pe_') && key !== 'pe_current_user' && key !== 'pe_session_user') {
-        clearTimeout(syncTimeout);
-        syncTimeout = setTimeout(() => {
-          const payload: any = {};
-          for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (k && k.startsWith('pe_') && k !== 'pe_current_user' && k !== 'pe_session_user') {
-              try {
-                payload[k] = JSON.parse(localStorage.getItem(k) || '""');
-              } catch {
-                payload[k] = localStorage.getItem(k);
-              }
-            }
-          }
-          fetch('/api/state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          }).catch(console.error);
-        }, 800);
-      }
-    };
-
-    return () => {
-      localStorage.setItem = originalSetItem;
-    };
-  }, [syncState]);
-
-  if (syncState === 'loading') {
-    return (
-      <div className="flex flex-col h-screen items-center justify-center bg-slate-950 text-teal-400 font-sans" dir="rtl">
-        <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-bold animate-pulse">در حال اتصال به سرور ابری کلادفلر و بارگذاری اطلاعات...</p>
-      </div>
-    );
-  }
-
-  return <MainApp />;
-}
-
-// --- ORIGINAL APP COMPONENT ---
-function MainApp() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [activeEvalId, setActiveEvalId] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [saveIndicator, setSaveIndicator] = useState(false);
   const [activeTourStep, setActiveTourStep] = useState<number | null>(null);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
-  
+
+  // Background initialization of cloud database sync (seamless on Cloudflare free)
+  useEffect(() => {
+    db.initializeCloudSync().catch(() => {});
+  }, []);
+
   const sanitizeUser = (user: Employee | null): Employee | null => {
     if (!user) return null;
-    if (user.role === 'admin' || user.username === 'admin' || user.name.includes('سوپر') || user.name.includes('ادمین')) {
-      return {
-        ...user,
-        name: 'مدیریت ارشد',
-        username: 'admin',
-        role: 'admin',
-        code: 'ADMIN-001',
-        unit: 'دفتر مرکزی'
-      };
-    }
     return user;
-  };
-
-  const sanitizeEmployees = (emps: Employee[]): Employee[] => {
-    return emps.map(emp => {
-      if (emp.role === 'admin' || emp.username === 'admin' || emp.name.includes('سوپر') || emp.name.includes('ادمین')) {
-        return {
-          ...emp,
-          name: 'مدیریت ارشد',
-          username: 'admin',
-          role: 'admin',
-          code: 'ADMIN-001',
-          unit: 'دفتر مرکزی'
-        };
-      }
-      return emp;
-    });
   };
 
   // Session-isolated user state (per browser/device)
@@ -227,22 +105,10 @@ function MainApp() {
     return browserNotifications.getPermissionStatus();
   });
 
-  // Re-sync organizational data when cloud background poll updates localStorage
+  // Invalidate admin session if password updated in another tab
   useEffect(() => {
-    const handleStorageUpdate = () => {
-      const savedCrit = localStorage.getItem('pe_criteria');
-      if (savedCrit) setCriteria(JSON.parse(savedCrit));
-      const savedProf = localStorage.getItem('pe_profiles');
-      if (savedProf) setProfiles(JSON.parse(savedProf));
-      const savedEmp = localStorage.getItem('pe_employees');
-      if (savedEmp) setEmployees(sanitizeEmployees(JSON.parse(savedEmp)));
-      const savedEval = localStorage.getItem('pe_evaluations');
-      if (savedEval) setEvaluations(JSON.parse(savedEval));
-      const savedArchived = localStorage.getItem('pe_archived_evaluations');
-      if (savedArchived) setArchivedEvaluations(JSON.parse(savedArchived));
-
-      // Invalidate admin session if password updated in another tab
-      if (currentUser?.role === 'admin') {
+    const handleStorageUpdate = (e: StorageEvent) => {
+      if (currentUser?.role === 'admin' && e.key === 'pe_admin_password_updated_at') {
         const sessionLoggedAt = sessionStorage.getItem('pe_admin_session_logged_at');
         const passUpdatedAt = localStorage.getItem('pe_admin_password_updated_at');
         if (sessionLoggedAt && passUpdatedAt) {
@@ -365,38 +231,11 @@ function MainApp() {
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; visible: boolean } | null>(null);
 
-  const [criteria, setCriteria] = useState<Criterion[]>(() => {
-    const saved = localStorage.getItem('pe_criteria');
-    return saved ? JSON.parse(saved) : SEED_CRITERIA;
-  });
-
-  const [profiles, setProfiles] = useState<JobProfile[]>(() => {
-    const saved = localStorage.getItem('pe_profiles');
-    return saved ? JSON.parse(saved) : SEED_PROFILES;
-  });
-
-  const [employees, setEmployees] = useState<Employee[]>(() => {
-    const saved = localStorage.getItem('pe_employees');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return sanitizeEmployees(parsed);
-      } catch {
-        return SEED_EMPLOYEES;
-      }
-    }
-    return SEED_EMPLOYEES;
-  });
-
-  const [evaluations, setEvaluations] = useState<Evaluation[]>(() => {
-    const saved = localStorage.getItem('pe_evaluations');
-    return saved ? JSON.parse(saved) : SEED_EVALUATIONS;
-  });
-
-  const [archivedEvaluations, setArchivedEvaluations] = useState<Evaluation[]>(() => {
-    const saved = localStorage.getItem('pe_archived_evaluations');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [criteria, setCriteria] = useState<Criterion[]>(() => db.getCriteria());
+  const [profiles, setProfiles] = useState<JobProfile[]>(() => db.getProfiles());
+  const [employees, setEmployees] = useState<Employee[]>(() => db.getEmployees());
+  const [evaluations, setEvaluations] = useState<Evaluation[]>(() => db.getEvaluations());
+  const [archivedEvaluations, setArchivedEvaluations] = useState<Evaluation[]>(() => db.getArchivedEvaluations());
 
   const notifyDataSaved = useCallback(() => {
     setSaveIndicator(true);
@@ -404,30 +243,18 @@ function MainApp() {
     return () => clearTimeout(t);
   }, []);
 
+  // Multi-tab sync without infinite render loops
   useEffect(() => {
-    localStorage.setItem('pe_criteria', JSON.stringify(criteria));
-    notifyDataSaved();
-  }, [criteria, notifyDataSaved]);
-
-  useEffect(() => {
-    localStorage.setItem('pe_profiles', JSON.stringify(profiles));
-    notifyDataSaved();
-  }, [profiles, notifyDataSaved]);
-
-  useEffect(() => {
-    localStorage.setItem('pe_employees', JSON.stringify(employees));
-    notifyDataSaved();
-  }, [employees, notifyDataSaved]);
-
-  useEffect(() => {
-    localStorage.setItem('pe_evaluations', JSON.stringify(evaluations));
-    notifyDataSaved();
-  }, [evaluations, notifyDataSaved]);
-
-  useEffect(() => {
-    localStorage.setItem('pe_archived_evaluations', JSON.stringify(archivedEvaluations));
-    notifyDataSaved();
-  }, [archivedEvaluations, notifyDataSaved]);
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'pe_criteria') setCriteria(db.getCriteria());
+      else if (e.key === 'pe_profiles') setProfiles(db.getProfiles());
+      else if (e.key === 'pe_employees') setEmployees(db.getEmployees());
+      else if (e.key === 'pe_evaluations') setEvaluations(db.getEvaluations());
+      else if (e.key === 'pe_archived_evaluations') setArchivedEvaluations(db.getArchivedEvaluations());
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
 
   // Check and alert pending tasks if user is logged in
   useEffect(() => {
@@ -602,17 +429,9 @@ function MainApp() {
     const validated = valResult.data;
     const exists = criteria.some(c => c.code.trim().toUpperCase() === validated.code.trim().toUpperCase());
     if (exists) return false;
-    const newCrit: Criterion = { 
-      id: `crit-${Math.random().toString(36).substring(2, 9)}`, 
-      code: validated.code,
-      cat: validated.cat,
-      name: validated.name,
-      def: validated.def,
-      source: validated.source,
-      method: validated.method,
-      dir: validated.dir
-    };
-    setCriteria(prev => [...prev, newCrit]);
+    db.addCriterion(validated);
+    setCriteria(db.getCriteria());
+    notifyDataSaved();
     return true;
   };
 
@@ -625,26 +444,22 @@ function MainApp() {
     const validated = valResult.data;
     const isDuplicate = criteria.some(c => c.code.trim().toUpperCase() === validated.code.trim().toUpperCase() && c.id !== id);
     if (isDuplicate) return false;
-    setCriteria(prev => prev.map(c => c.id === id ? { 
-      ...c, 
-      code: validated.code,
-      cat: validated.cat,
-      name: validated.name,
-      def: validated.def,
-      source: validated.source,
-      method: validated.method,
-      dir: validated.dir
-    } : c));
+    db.updateCriterion(id, validated);
+    setCriteria(db.getCriteria());
+    notifyDataSaved();
     return true;
   };
 
   const handleDeleteCriterion = (id: string) => {
-    const isUsed = profiles.some(p => p.items.some(item => item.cid === id));
-    if (isUsed) {
-      alert('این شاخص در یک پروفایل شغلی استفاده شده و قابل حذف نیست.');
-      return;
+    const res = db.deleteCriterion(id);
+    if (res.success) {
+      setCriteria(db.getCriteria());
+      setProfiles(db.getProfiles());
+      setEvaluations(db.getEvaluations());
+      notifyDataSaved();
+    } else {
+      alert('خطا در حذف شاخص');
     }
-    setCriteria(criteria.filter(c => c.id !== id));
   };
 
   const handleAddProfile = (prof: Omit<JobProfile, 'id'>) => {
@@ -653,16 +468,9 @@ function MainApp() {
       alert(valResult.errors.join('\n'));
       return;
     }
-    const validated = valResult.data;
-    const newProf: JobProfile = { 
-      id: `prof-${Math.random().toString(36).substring(2, 9)}`, 
-      title: validated.title,
-      code: validated.code,
-      family: validated.family,
-      locked: validated.locked,
-      items: validated.items
-    };
-    setProfiles(prev => [...prev, newProf]);
+    db.addProfile(valResult.data);
+    setProfiles(db.getProfiles());
+    notifyDataSaved();
   };
 
   const handleUpdateProfile = (id: string, prof: Omit<JobProfile, 'id'>) => {
@@ -671,28 +479,28 @@ function MainApp() {
       alert(valResult.errors.join('\n'));
       return;
     }
-    const validated = valResult.data;
-    setProfiles(prev => prev.map(p => p.id === id ? { 
-      ...p, 
-      title: validated.title,
-      code: validated.code,
-      family: validated.family,
-      locked: validated.locked,
-      items: validated.items
-    } : p));
+    db.updateProfile(id, valResult.data);
+    setProfiles(db.getProfiles());
+    notifyDataSaved();
   };
 
   const handleDeleteProfile = (id: string) => {
-    const isAssigned = employees.some(e => e.profileId === id);
-    if (isAssigned) {
-      alert('این پروفایل به کارمندان متصل است و قابل حذف نیست.');
+    const res = db.deleteProfile(id);
+    if (!res.success) {
+      alert(res.error || 'این پروفایل به کارمندان متصل است و قابل حذف نیست.');
       return;
     }
-    setProfiles(profiles.filter(p => p.id !== id));
+    setProfiles(db.getProfiles());
+    notifyDataSaved();
   };
 
   const handleToggleLockProfile = (id: string) => {
-    setProfiles(profiles.map(p => p.id === id ? { ...p, locked: !p.locked } : p));
+    const prof = profiles.find(p => p.id === id);
+    if (prof) {
+      db.updateProfile(id, { ...prof, locked: !prof.locked });
+      setProfiles(db.getProfiles());
+      notifyDataSaved();
+    }
   };
 
   const handleAddEmployee = (emp: Omit<Employee, 'id'>) => {
@@ -701,22 +509,12 @@ function MainApp() {
       alert(valResult.errors.join('\n'));
       return;
     }
-    const validated = valResult.data;
-    const newEmp: Employee = { 
-      id: `emp-${Math.random().toString(36).substring(2, 9)}`, 
-      name: validated.name,
-      code: validated.code,
-      unit: validated.unit,
-      profileId: validated.profileId,
-      role: validated.role,
-      username: validated.username,
-      supervisorId: validated.supervisorId,
-      peerReviewerId: validated.peerReviewerId,
-      calibrationLeadId: validated.calibrationLeadId,
-      approverId: validated.approverId,
-      hrPartnerId: validated.hrPartnerId
-    };
-    setEmployees(prev => [...prev, newEmp]);
+    const { employee: newEmp, evaluation } = db.addEmployee(valResult.data);
+    setEmployees(db.getEmployees());
+    if (evaluation) {
+      setEvaluations(db.getEvaluations());
+    }
+    notifyDataSaved();
   };
 
   const handleUpdateEmployee = (id: string, emp: Omit<Employee, 'id'>) => {
@@ -725,84 +523,74 @@ function MainApp() {
       alert(valResult.errors.join('\n'));
       return;
     }
-    const validated = valResult.data;
-    setEmployees(prev => prev.map(e => e.id === id ? { 
-      ...e, 
-      name: validated.name,
-      code: validated.code,
-      unit: validated.unit,
-      profileId: validated.profileId,
-      role: validated.role,
-      username: validated.username,
-      supervisorId: validated.supervisorId,
-      peerReviewerId: validated.peerReviewerId,
-      calibrationLeadId: validated.calibrationLeadId,
-      approverId: validated.approverId,
-      hrPartnerId: validated.hrPartnerId
-    } : e));
+    db.updateEmployee(id, valResult.data);
+    setEmployees(db.getEmployees());
+    notifyDataSaved();
   };
 
   const handleDeleteEmployee = (id: string) => {
     const target = employees.find(e => e.id === id);
     if (!target) return;
-    // Protect admin account strictly
     if (target.role === 'admin' || target.username === 'admin' || target.code === 'ADMIN-001') {
       return;
     }
-    const updatedEmployees = employees.filter(e => e.id !== id);
-    const updatedEvaluations = evaluations.filter(ev => ev.empId !== id);
-    setEmployees(updatedEmployees);
-    setEvaluations(updatedEvaluations);
-    localStorage.setItem('pe_employees', JSON.stringify(updatedEmployees));
-    localStorage.setItem('pe_evaluations', JSON.stringify(updatedEvaluations));
+    const success = db.deleteEmployee(id);
+    if (success) {
+      setEmployees(db.getEmployees());
+      setEvaluations(db.getEvaluations());
+      notifyDataSaved();
+    }
+  };
 
-    // Clear credential records if any
-    try {
-      const pKey = target.username.toLowerCase();
-      const pwMap = JSON.parse(localStorage.getItem('pe_user_passwords') || '{}');
-      if (pwMap[pKey]) {
-        delete pwMap[pKey];
-        localStorage.setItem('pe_user_passwords', JSON.stringify(pwMap));
-      }
-    } catch (e) {}
+  const handleBulkUpdateEmployees = (updatedList: Employee[]) => {
+    db.saveEmployees(updatedList);
+    setEmployees(db.getEmployees());
+    notifyDataSaved();
+  };
 
-    // Immediate sync to server
-    fetch('/api/state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pe_employees: updatedEmployees,
-        pe_evaluations: updatedEvaluations
-      })
-    }).catch(console.error);
+  const handleBulkUpdateEvaluations = (updatedEvals: Evaluation[]) => {
+    db.saveEvaluations(updatedEvals);
+    setEvaluations(updatedEvals);
+    notifyDataSaved();
   };
 
   const handleAddEvaluation = (empId: string, period: string) => {
     const emp = employees.find(e => e.id === empId);
     if (!emp) return;
-    const prof = profiles.find(p => p.id === emp.profileId);
+    const prof = profiles.find(p => p.id === emp.profileId) || profiles[0];
     if (!prof) return;
-    const initialScores = prof.items.map(item => ({ cid: item.cid, weight: item.weight, value: 0, self: 0, doc: '' }));
+    const initialScores = (prof.items || []).map(item => ({ cid: item.cid, weight: item.weight, value: 0, self: 0, doc: '' }));
     const newEval: Evaluation = {
-      id: `eval-${Math.random().toString(36).substring(2, 9)}`,
-      empId, profileId: prof.id, period, status: 'draft', scores: initialScores, created: Date.now()
+      id: `eval-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      empId,
+      profileId: prof.id,
+      period,
+      status: 'draft',
+      scores: initialScores,
+      created: Date.now()
     };
-    setEvaluations([...evaluations, newEval]);
+    const updated = [...evaluations, newEval];
+    db.saveEvaluations(updated);
+    setEvaluations(updated);
     setActiveEvalId(newEval.id);
     setCurrentTab('evaluations');
+    notifyDataSaved();
   };
 
   const handleUpdateEvaluation = (id: string, updatedEv: Evaluation) => {
-    setEvaluations(prev => {
-      const exists = prev.some(e => e.id === id);
-      if (exists) return prev.map(e => e.id === id ? updatedEv : e);
-      return [...prev, updatedEv];
-    });
+    const exists = evaluations.some(e => e.id === id);
+    const updated = exists ? evaluations.map(e => e.id === id ? updatedEv : e) : [...evaluations, updatedEv];
+    db.saveEvaluations(updated);
+    setEvaluations(updated);
+    notifyDataSaved();
   };
 
   const handleDeleteEvaluation = (id: string) => {
-    setEvaluations(evaluations.filter(e => e.id !== id));
+    const updated = evaluations.filter(e => e.id !== id);
+    db.saveEvaluations(updated);
+    setEvaluations(updated);
     if (activeEvalId === id) setActiveEvalId(null);
+    notifyDataSaved();
   };
 
   const handleStartEvaluationDirect = (empId: string) => {
@@ -890,7 +678,7 @@ function MainApp() {
         isMobileOpen={isMobileMenuOpen} onCloseMobile={() => setIsMobileMenuOpen(false)} 
       />
 
-      <main className={`flex-1 overflow-y-auto transition-colors duration-300 ${theme === 'dark' ? 'bg-slate-950/60 backdrop-blur-3xl' : 'bg-slate-100/40'}`}>
+      <main className={`flex-1 overflow-y-auto transition-colors duration-300 ${theme === 'dark' ? 'bg-slate-950/60' : 'bg-slate-100/40'}`}>
         {/* Desktop Sticky Header with Supervisor Overdue Notification Bell */}
         <div className={`hidden md:flex items-center justify-between px-6 py-2.5 border-b sticky top-0 z-20 backdrop-blur-md ${
           theme === 'dark' ? 'bg-slate-950/85 border-slate-800/80' : 'bg-white/85 border-slate-200/80 shadow-xs'
@@ -935,7 +723,7 @@ function MainApp() {
         <div className="p-4 sm:p-6 md:p-8">
           <div className="max-w-7xl mx-auto space-y-6">
           {currentTab === 'dashboard' && <Dashboard criteria={criteria} profiles={profiles} employees={employees} evaluations={evaluations} onNavigate={setCurrentTab} onSelectEvaluation={handleSelectEvaluation} currentUser={currentUser} hasCertifiedBadge={hasCertifiedBadge} theme={theme} />}
-          {currentTab === 'workflow' && <WorkflowManager currentUser={currentUser} evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} theme={theme} />}
+          {currentTab === 'workflow' && <WorkflowManager currentUser={currentUser} evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onBulkUpdateEvaluations={handleBulkUpdateEvaluations} onUpdateEmployees={handleBulkUpdateEmployees} onSelectEvaluation={handleSelectEvaluation} theme={theme} />}
           {currentTab === 'criteria' && (
             <CriteriaBank 
               criteria={criteria} 
@@ -950,8 +738,8 @@ function MainApp() {
             />
           )}
           {currentTab === 'profiles' && <JobProfiles profiles={profiles} criteria={criteria} onAddProfile={handleAddProfile} onUpdateProfile={handleUpdateProfile} onDeleteProfile={handleDeleteProfile} onToggleLockProfile={handleToggleLockProfile} onAddCriterion={handleAddCriterion} theme={theme} />}
-          {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onDeleteEmployee={handleDeleteEmployee} onStartEvaluation={handleStartEvaluationDirect} theme={theme} />}
-          {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onDeleteEvaluation={handleDeleteEvaluation} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} currentUser={currentUser} />}
+          {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onBulkUpdateEmployees={handleBulkUpdateEmployees} onDeleteEmployee={handleDeleteEmployee} onStartEvaluation={handleStartEvaluationDirect} theme={theme} />}
+          {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onBulkUpdateEvaluations={handleBulkUpdateEvaluations} onDeleteEvaluation={handleDeleteEvaluation} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} currentUser={currentUser} />}
           {currentTab === 'calibration' && <Calibration evaluations={evaluations} employees={employees} profiles={profiles} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} />}
           {currentTab === 'reports' && <Reports evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} />}
           {currentTab === 'lattice-hub' && (
@@ -1106,6 +894,8 @@ function MainApp() {
         isOpen={isManualModalOpen}
         onClose={() => setIsManualModalOpen(false)}
         theme={theme}
+        currentUser={currentUser}
+        employees={employees}
       />
     </div>
   );

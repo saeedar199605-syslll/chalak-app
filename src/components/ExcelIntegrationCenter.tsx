@@ -57,6 +57,7 @@ import {
   calculateKasraScore,
   calculateMISScore
 } from '../utils/excelImportExport';
+import { db, CURRENT_ACTIVE_PERIOD } from '../utils/db';
 
 interface ExcelIntegrationCenterProps {
   isOpen: boolean;
@@ -99,6 +100,17 @@ export default function ExcelIntegrationCenter({
   const [dynamicWarnings, setDynamicWarnings] = useState<string[]>([]);
   const [dynamicMatchedCount, setDynamicMatchedCount] = useState<number>(0);
   const [showMappingConfig, setShowMappingConfig] = useState(false);
+
+  // Validation Report State
+  const [validationSummary, setValidationSummary] = useState<{
+    source: string;
+    totalProcessed: number;
+    newEvaluations: number;
+    updatedEvaluations: number;
+    slotsPopulated: number;
+    warnings: string[];
+  } | null>(null);
+  const [showValidationWarnings, setShowValidationWarnings] = useState(false);
 
   // Kasra & MIS Direct State (Legacy support)
   const [kasraRecords, setKasraRecords] = useState<KasraAttendanceRecord[]>([]);
@@ -284,7 +296,7 @@ export default function ExcelIntegrationCenter({
     setSuccessMessage('تمام ویرایش‌های دستی لغو و مقادیر به داده‌های اولیه فایل اکسل بازگردانی شدند.');
   };
 
-  // --- 4. APPLY DYNAMIC RECORDS TO EVALUATIONS (LIVE SYNC) ---
+  // --- 4. APPLY DYNAMIC RECORDS TO EVALUATIONS (LIVE SYNC & VALIDATION LAYER) ---
   const handleApplyDynamicRecords = () => {
     if (dynamicRecords.length === 0) {
       alert('هیچ داده‌ای برای ثبت موجود نیست.');
@@ -294,32 +306,72 @@ export default function ExcelIntegrationCenter({
     let updatedEvaluations = [...evaluations];
     let updatedEvalsCount = 0;
     let newEvalsCount = 0;
+    let slotsPopulated = 0;
+    const warnings: string[] = [];
 
-    dynamicRecords.forEach(rec => {
+    dynamicRecords.forEach((rec, idx) => {
+      const rowNum = idx + 1;
+      // 1. Resolve Employee by code, username, or name
       const emp = employees.find(
         e => (rec.empCode && e.code.toUpperCase() === rec.empCode.toUpperCase()) ||
              (rec.empCode && e.username.toLowerCase() === rec.empCode.toLowerCase()) ||
-             (rec.empName && e.name.includes(rec.empName))
+             (rec.empName && e.name.trim() === rec.empName.trim()) ||
+             (rec.empName && e.name.includes(rec.empName.trim()))
       );
 
-      if (!emp || !emp.profileId) return;
+      if (!emp) {
+        warnings.push(`ردیف ${rowNum}: پرسنل با کد «${rec.empCode || 'نامشخص'}» و نام «${rec.empName || 'نامشخص'}» در فهرست پرسنل یافت نشد و نادیده گرفته شد.`);
+        return;
+      }
 
-      const prof = profiles.find(p => p.id === emp.profileId);
-      if (!prof) return;
+      // 2. Resolve Job Profile
+      let prof = profiles.find(p => p.id === emp.profileId);
+      if (!prof) {
+        prof = profiles[0];
+        if (prof) {
+          warnings.push(`ردیف ${rowNum} (${emp.name}): فاقد رده شغلی مشخص بود؛ الگوی پیش‌فرض «${prof.title}» اعمال شد.`);
+        }
+      }
 
+      if (!prof || !prof.items || prof.items.length === 0) {
+        warnings.push(`ردیف ${rowNum} (${emp.name}): هیچ شاخصی برای رده شغلی این پرسنل تعریف نشده است.`);
+        return;
+      }
+
+      const evalPeriod = rec.period || CURRENT_ACTIVE_PERIOD;
       let targetIndex = updatedEvaluations.findIndex(
-        ev => ev.empId === emp.id && ev.period === rec.period
+        ev => ev.empId === emp.id && ev.period === evalPeriod
       );
 
       if (targetIndex === -1) {
-        // Create new evaluation
+        // Create new evaluation shell with full schema mapping
         const initialScores = prof.items.map(item => {
-          const importedScore = rec.scores[item.cid];
-          const importedDoc = rec.docs[item.cid];
+          const critItem = criteria.find(c => c.id === item.cid || c.code === item.cid);
+          
+          let importedScore = rec.scores[item.cid];
+          if (importedScore === undefined && critItem) {
+            importedScore = rec.scores[critItem.id] ?? rec.scores[critItem.code];
+          }
+          let importedDoc = rec.docs[item.cid];
+          if (!importedDoc && critItem) {
+            importedDoc = rec.docs[critItem.id] || rec.docs[critItem.code] || '';
+          }
+
+          let scoreVal = 0;
+          if (importedScore !== undefined) {
+            const num = Number(importedScore);
+            if (!isNaN(num)) {
+              scoreVal = Math.max(0, Math.min(5, Math.round(num * 10) / 10));
+              slotsPopulated++;
+            } else {
+              warnings.push(`ردیف ${rowNum} (${emp.name}): مقدار نمره برای شاخص «${critItem?.name || item.cid}» غیرعددی است.`);
+            }
+          }
+
           return {
             cid: item.cid,
             weight: item.weight,
-            value: importedScore !== undefined ? importedScore : 0,
+            value: scoreVal,
             self: 0,
             doc: importedDoc || ''
           };
@@ -329,8 +381,12 @@ export default function ExcelIntegrationCenter({
           id: `eval-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           empId: emp.id,
           profileId: prof.id,
-          period: rec.period,
+          period: evalPeriod,
           status: 'draft',
+          stage: 'self_review',
+          currentAssigneeId: emp.id,
+          currentAssigneeRole: 'employee',
+          currentAssigneeName: emp.name,
           scores: initialScores,
           note: rec.overallNote || '',
           created: Date.now()
@@ -339,34 +395,87 @@ export default function ExcelIntegrationCenter({
         updatedEvaluations.push(newEval);
         newEvalsCount++;
       } else {
-        // Update existing evaluation
+        // Update existing evaluation while validating and completing schema
         const currentEval = updatedEvaluations[targetIndex];
-        const updatedScores = currentEval.scores.map(s => {
-          if (rec.scores[s.cid] !== undefined) {
-            return {
-              ...s,
-              value: rec.scores[s.cid],
-              doc: rec.docs[s.cid] || s.doc
-            };
+        const existingScoreMap = new Map(currentEval.scores.map(s => [s.cid, s]));
+
+        // Ensure all profile items are present
+        const validatedScores = prof.items.map(item => {
+          const critItem = criteria.find(c => c.id === item.cid || c.code === item.cid);
+          const existingScore = existingScoreMap.get(item.cid);
+
+          let importedScore = rec.scores[item.cid];
+          if (importedScore === undefined && critItem) {
+            importedScore = rec.scores[critItem.id] ?? rec.scores[critItem.code];
           }
-          return s;
+          let importedDoc = rec.docs[item.cid];
+          if (!importedDoc && critItem) {
+            importedDoc = rec.docs[critItem.id] || rec.docs[critItem.code] || '';
+          }
+
+          if (importedScore !== undefined) {
+            const num = Number(importedScore);
+            if (!isNaN(num)) {
+              const scoreVal = Math.max(0, Math.min(5, Math.round(num * 10) / 10));
+              slotsPopulated++;
+              return {
+                cid: item.cid,
+                weight: item.weight,
+                value: scoreVal,
+                self: existingScore ? existingScore.self : 0,
+                doc: importedDoc || existingScore?.doc || ''
+              };
+            } else {
+              warnings.push(`ردیف ${rowNum} (${emp.name}): نمره «${importedScore}» غیرعددی است و تغییر نیافت.`);
+            }
+          }
+
+          return existingScore ? { ...existingScore, weight: item.weight } : {
+            cid: item.cid,
+            weight: item.weight,
+            value: 0,
+            self: 0,
+            doc: ''
+          };
         });
 
         updatedEvaluations[targetIndex] = {
           ...currentEval,
-          scores: updatedScores,
-          note: rec.overallNote ? `${currentEval.note ? currentEval.note + '\n' : ''}${rec.overallNote}` : currentEval.note
+          profileId: prof.id,
+          scores: validatedScores,
+          note: rec.overallNote 
+            ? (currentEval.note ? `${currentEval.note}\n${rec.overallNote}` : rec.overallNote)
+            : currentEval.note
         };
         updatedEvalsCount++;
       }
     });
 
+    // Multi-layer immediate persistence
+    db.saveEvaluations(updatedEvaluations);
+    try {
+      localStorage.setItem('pe_evaluations', JSON.stringify(updatedEvaluations));
+    } catch {
+      // Ignore storage error
+    }
     onUpdateEvaluations(updatedEvaluations);
-    setSuccessMessage(`✅ داده‌ها با موفقیت و به صورت در لحظه در سیستم ارزیابی اعمال شدند (${newEvalsCount} ارزیابی جدید ساخته شد و ${updatedEvalsCount} ارزیابی موجود به‌روزرسانی گردید).`);
+
+    // Validation Report
+    const totalProcessed = newEvalsCount + updatedEvalsCount;
+    setValidationSummary({
+      source: 'ماتریس شاخص‌های داینامیک اکسل',
+      totalProcessed,
+      newEvaluations: newEvalsCount,
+      updatedEvaluations: updatedEvalsCount,
+      slotsPopulated,
+      warnings
+    });
+
+    setSuccessMessage(`✅ داده‌ها با موفقیت و به صورت در لحظه اعتبارسنجی و ذخیره شدند (${newEvalsCount} ارزیابی جدید، ${updatedEvalsCount} ارزیابی به‌روزرسانی‌شده، ${slotsPopulated} اسلات نمره تکمیل گردید).`);
 
     logAudit(
       'اعمال نمرات اکسل داینامیک بر ارزیابی‌ها',
-      `ثبت موفق نمرات برای ${newEvalsCount + updatedEvalsCount} پرسنل در دوره`,
+      `ثبت موفق ${slotsPopulated} اسلات نمره برای ${totalProcessed} پرسنل در دوره`,
       'success'
     );
   };
@@ -398,64 +507,177 @@ export default function ExcelIntegrationCenter({
     if (kasraRecords.length === 0) return;
 
     let updatedEvaluations = [...evaluations];
-    let appliedCount = 0;
+    let updatedEvalsCount = 0;
+    let newEvalsCount = 0;
+    let slotsPopulated = 0;
+    const warnings: string[] = [];
 
-    kasraRecords.forEach(rec => {
+    kasraRecords.forEach((rec, idx) => {
+      const rowNum = idx + 1;
       const emp = employees.find(
-        e => e.code.toUpperCase() === rec.empCode.toUpperCase() ||
-             (rec.empName && e.name.includes(rec.empName))
+        e => (rec.empCode && e.code.toUpperCase() === rec.empCode.toUpperCase()) ||
+             (rec.empCode && e.username.toLowerCase() === rec.empCode.toLowerCase()) ||
+             (rec.empName && e.name.trim() === rec.empName.trim()) ||
+             (rec.empName && e.name.includes(rec.empName.trim()))
       );
 
-      if (!emp || !emp.profileId) return;
-      const prof = profiles.find(p => p.id === emp.profileId);
-      if (!prof) return;
+      if (!emp) {
+        warnings.push(`ردیف ${rowNum}: پرسنل با کد «${rec.empCode || 'نامشخص'}» و نام «${rec.empName || 'نامشخص'}» یافت نشد.`);
+        return;
+      }
 
+      let prof = profiles.find(p => p.id === emp.profileId);
+      if (!prof) {
+        prof = profiles[0];
+        if (prof) {
+          warnings.push(`ردیف ${rowNum} (${emp.name}): فاقد رده شغلی مشخص؛ الگوی «${prof.title}» اعمال شد.`);
+        }
+      }
+
+      if (!prof || !prof.items || prof.items.length === 0) {
+        warnings.push(`ردیف ${rowNum} (${emp.name}): هیچ شاخصی برای رده شغلی تعریف نشده است.`);
+        return;
+      }
+
+      const evalPeriod = rec.period || CURRENT_ACTIVE_PERIOD;
       let targetIndex = updatedEvaluations.findIndex(
-        ev => ev.empId === emp.id && ev.period === rec.period
+        ev => ev.empId === emp.id && ev.period === evalPeriod
       );
 
       if (targetIndex === -1) {
-        const scores = prof.items.map(item => ({
-          cid: item.cid,
-          weight: item.weight,
-          value: 0,
-          self: 0,
-          doc: ''
-        }));
+        const scores = prof.items.map(item => {
+          const crit = criteria.find(c => c.id === item.cid || c.code === item.cid);
+          const effectiveSource = crit?.scoringSource || (crit?.code.startsWith('B-01') ? 'kasra' : crit?.cat === 'K' ? 'mis' : 'supervisor');
+          const isKasraCrit = crit && effectiveSource === 'kasra' && (crit.autoPopulate !== false);
+          let scoreVal = 0;
+          let docVal = '';
+          let rawVal: number | undefined = undefined;
+
+          if (isKasraCrit) {
+            if (crit.misMetricKey === 'attendance_delay') {
+              scoreVal = rec.delayMinutes <= 15 ? 5 : rec.delayMinutes <= 45 ? 4 : rec.delayMinutes <= 120 ? 3 : rec.delayMinutes <= 240 ? 2 : 1;
+              rawVal = rec.delayMinutes;
+            } else if (crit.misMetricKey === 'attendance_absence') {
+              scoreVal = rec.absenceDays === 0 ? 5 : rec.absenceDays <= 1 ? 3 : rec.absenceDays <= 2 ? 2 : 1;
+              rawVal = rec.absenceDays;
+            } else if (crit.misMetricKey === 'discipline') {
+              scoreVal = rec.disciplineInfractions === 0 ? 5 : rec.disciplineInfractions === 1 ? 3 : 1;
+              rawVal = rec.disciplineInfractions;
+            } else {
+              scoreVal = Math.max(0, Math.min(5, Math.round(Number(rec.calculatedScore) * 10) / 10));
+              rawVal = rec.delayMinutes;
+            }
+            docVal = `داده کسری: تاخیر ${rec.delayMinutes} دقیقه | غیبت ${rec.absenceDays} روز | تذکر انضباطی ${rec.disciplineInfractions}`;
+            slotsPopulated++;
+          }
+
+          return {
+            cid: item.cid,
+            weight: item.weight,
+            value: scoreVal,
+            self: 0,
+            doc: docVal,
+            sourceType: isKasraCrit ? ('kasra' as const) : effectiveSource === 'supervisor' ? ('supervisor' as const) : undefined,
+            autoPopulated: isKasraCrit,
+            rawMetricValue: rawVal
+          };
+        });
+
         const newEv: Evaluation = {
           id: `eval-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           empId: emp.id,
           profileId: prof.id,
-          period: rec.period,
+          period: evalPeriod,
           status: 'draft',
+          stage: 'self_review',
+          currentAssigneeId: emp.id,
+          currentAssigneeRole: 'employee',
+          currentAssigneeName: emp.name,
           scores,
-          note: '',
+          note: 'ایجاد شده خودکار از ایمپورت فایل حضور و غیاب کسری',
           created: Date.now()
         };
         updatedEvaluations.push(newEv);
-        targetIndex = updatedEvaluations.length - 1;
-      }
+        newEvalsCount++;
+      } else {
+        const targetEval = updatedEvaluations[targetIndex];
+        const existingScoreMap = new Map(targetEval.scores.map(s => [s.cid, s]));
 
-      const targetEval = updatedEvaluations[targetIndex];
-      const updatedScores = targetEval.scores.map(s => {
-        const crit = criteria.find(c => c.id === s.cid);
-        const isAttendanceCrit = crit && (crit.cat === 'B' || crit.cat === 'S' || crit.name.includes('حضور') || crit.name.includes('انضباط'));
-        if (isAttendanceCrit) {
-          return {
-            ...s,
-            value: rec.calculatedScore,
-            doc: `داده کسری: تاخیر ${rec.delayMinutes} دقیقه | غیبت ${rec.absenceDays} روز | تذکر انضباطی ${rec.disciplineInfractions}`
+        const updatedScores = prof.items.map(item => {
+          const crit = criteria.find(c => c.id === item.cid || c.code === item.cid);
+          const existingScore = existingScoreMap.get(item.cid);
+          const effectiveSource = crit?.scoringSource || (crit?.code.startsWith('B-01') ? 'kasra' : crit?.cat === 'K' ? 'mis' : 'supervisor');
+          const isKasraCrit = crit && effectiveSource === 'kasra' && (crit.autoPopulate !== false);
+
+          if (isKasraCrit) {
+            let scoreVal = 0;
+            let rawVal: number | undefined = undefined;
+
+            if (crit.misMetricKey === 'attendance_delay') {
+              scoreVal = rec.delayMinutes <= 15 ? 5 : rec.delayMinutes <= 45 ? 4 : rec.delayMinutes <= 120 ? 3 : rec.delayMinutes <= 240 ? 2 : 1;
+              rawVal = rec.delayMinutes;
+            } else if (crit.misMetricKey === 'attendance_absence') {
+              scoreVal = rec.absenceDays === 0 ? 5 : rec.absenceDays <= 1 ? 3 : rec.absenceDays <= 2 ? 2 : 1;
+              rawVal = rec.absenceDays;
+            } else if (crit.misMetricKey === 'discipline') {
+              scoreVal = rec.disciplineInfractions === 0 ? 5 : rec.disciplineInfractions === 1 ? 3 : 1;
+              rawVal = rec.disciplineInfractions;
+            } else {
+              scoreVal = Math.max(0, Math.min(5, Math.round(Number(rec.calculatedScore) * 10) / 10));
+              rawVal = rec.delayMinutes;
+            }
+            slotsPopulated++;
+            return {
+              cid: item.cid,
+              weight: item.weight,
+              value: scoreVal,
+              self: existingScore ? existingScore.self : 0,
+              doc: `داده کسری: تاخیر ${rec.delayMinutes} دقیقه | غیبت ${rec.absenceDays} روز | تذکر انضباطی ${rec.disciplineInfractions}`,
+              sourceType: 'kasra' as const,
+              autoPopulated: true,
+              rawMetricValue: rawVal
+            };
+          }
+
+          return existingScore ? { ...existingScore, weight: item.weight } : {
+            cid: item.cid,
+            weight: item.weight,
+            value: 0,
+            self: 0,
+            doc: '',
+            sourceType: effectiveSource === 'supervisor' ? ('supervisor' as const) : undefined
           };
-        }
-        return s;
-      });
+        });
 
-      updatedEvaluations[targetIndex] = { ...targetEval, scores: updatedScores };
-      appliedCount++;
+        updatedEvaluations[targetIndex] = {
+          ...targetEval,
+          profileId: prof.id,
+          scores: updatedScores
+        };
+        updatedEvalsCount++;
+      }
     });
 
+    // Immediate multi-layer persistence
+    db.saveEvaluations(updatedEvaluations);
+    try {
+      localStorage.setItem('pe_evaluations', JSON.stringify(updatedEvaluations));
+    } catch {
+      // Ignore
+    }
     onUpdateEvaluations(updatedEvaluations);
-    setSuccessMessage(`نمرات حضور و غیاب کسری برای ${appliedCount} ارزیابی در لحظه اعمال شد.`);
+
+    const totalProcessed = newEvalsCount + updatedEvalsCount;
+    setValidationSummary({
+      source: 'سامانه حضور و غیاب کسری',
+      totalProcessed,
+      newEvaluations: newEvalsCount,
+      updatedEvaluations: updatedEvalsCount,
+      slotsPopulated,
+      warnings
+    });
+
+    setSuccessMessage(`✅ نمرات حضور و غیاب کسری برای ${totalProcessed} ارزیابی با موفقیت در اسلات‌های انضباطی ثبت و پایدار شدند (${slotsPopulated} اسلات نمره).`);
   };
 
   // --- 6. MIS FILE UPLOAD (LEGACY DIRECT) ---
@@ -485,64 +707,215 @@ export default function ExcelIntegrationCenter({
     if (misRecords.length === 0) return;
 
     let updatedEvaluations = [...evaluations];
-    let appliedCount = 0;
+    let updatedEvalsCount = 0;
+    let newEvalsCount = 0;
+    let slotsPopulated = 0;
+    const warnings: string[] = [];
 
-    misRecords.forEach(rec => {
+    misRecords.forEach((rec, idx) => {
+      const rowNum = idx + 1;
       const emp = employees.find(
-        e => e.code.toUpperCase() === rec.empCode.toUpperCase() ||
-             (rec.empName && e.name.includes(rec.empName))
+        e => (rec.empCode && e.code.toUpperCase() === rec.empCode.toUpperCase()) ||
+             (rec.empCode && e.username.toLowerCase() === rec.empCode.toLowerCase()) ||
+             (rec.empName && e.name.trim() === rec.empName.trim()) ||
+             (rec.empName && e.name.includes(rec.empName.trim()))
       );
 
-      if (!emp || !emp.profileId) return;
-      const prof = profiles.find(p => p.id === emp.profileId);
-      if (!prof) return;
+      if (!emp) {
+        warnings.push(`ردیف ${rowNum}: پرسنل با کد «${rec.empCode || 'نامشخص'}» و نام «${rec.empName || 'نامشخص'}» یافت نشد.`);
+        return;
+      }
 
+      let prof = profiles.find(p => p.id === emp.profileId);
+      if (!prof) {
+        prof = profiles[0];
+        if (prof) {
+          warnings.push(`ردیف ${rowNum} (${emp.name}): فاقد رده شغلی مشخص؛ الگوی «${prof.title}» اعمال شد.`);
+        }
+      }
+
+      if (!prof || !prof.items || prof.items.length === 0) {
+        warnings.push(`ردیف ${rowNum} (${emp.name}): هیچ شاخصی برای رده شغلی تعریف نشده است.`);
+        return;
+      }
+
+      const evalPeriod = rec.period || CURRENT_ACTIVE_PERIOD;
       let targetIndex = updatedEvaluations.findIndex(
-        ev => ev.empId === emp.id && ev.period === rec.period
+        ev => ev.empId === emp.id && ev.period === evalPeriod
       );
+
+      // Helper function to calculate precise score from MIS record based on misMetricKey
+      const computeScoreForMisCriterion = (crit: Criterion) => {
+        let scoreVal = 0;
+        let docVal = '';
+        let rawVal: number = 0;
+
+        if (crit.misMetricKey === 'efficiency') {
+          rawVal = Number(rec.efficiencyRate) || 0;
+          if (rawVal >= 104) scoreVal = 5;
+          else if (rawVal >= 99) scoreVal = 4;
+          else if (rawVal >= 92) scoreVal = 3;
+          else if (rawVal >= 80) scoreVal = 2;
+          else scoreVal = 1;
+          docVal = `داده خودکار MIS: درصد راندمان خط ${rawVal}٪ (هدف: ۱۰۰٪)`;
+        } else if (crit.misMetricKey === 'scrap_rate') {
+          rawVal = Number(rec.scrapRate) || 0;
+          if (rawVal <= 1.1) scoreVal = 5;
+          else if (rawVal <= 2.0) scoreVal = 4;
+          else if (rawVal <= 3.2) scoreVal = 3;
+          else if (rawVal <= 5.0) scoreVal = 2;
+          else scoreVal = 1;
+          docVal = `داده خودکار MIS: نرخ ضایعات ${rawVal}٪ (سقف مجاز: ۲٪)`;
+        } else if (crit.misMetricKey === 'quality_score') {
+          rawVal = Number(rec.qualityScore) || 0;
+          if (rawVal >= 98) scoreVal = 5;
+          else if (rawVal >= 95) scoreVal = 4;
+          else if (rawVal >= 90) scoreVal = 3;
+          else if (rawVal >= 85) scoreVal = 2;
+          else scoreVal = 1;
+          docVal = `داده خودکار MIS: آزمون کیفی QC به میزان ${rawVal}٪`;
+        } else if (crit.misMetricKey === 'output_qty') {
+          rawVal = Number(rec.actualOutput) || 0;
+          const target = Number(rec.targetOutput) || 12000;
+          const ratio = target > 0 ? (rawVal / target) : 1;
+          if (ratio >= 1.04) scoreVal = 5;
+          else if (ratio >= 0.98) scoreVal = 4;
+          else if (ratio >= 0.90) scoreVal = 3;
+          else if (ratio >= 0.80) scoreVal = 2;
+          else scoreVal = 1;
+          docVal = `داده خودکار MIS: تیراژ تولید واقعی ${rawVal} قطعه (برنامه مصوب: ${target})`;
+        } else if (crit.misMetricKey === 'downtime') {
+          rawVal = Number(rec.downtimeHours) || 0;
+          if (rawVal <= 2) scoreVal = 5;
+          else if (rawVal <= 4) scoreVal = 4;
+          else if (rawVal <= 6) scoreVal = 3;
+          else if (rawVal <= 9) scoreVal = 2;
+          else scoreVal = 1;
+          docVal = `داده خودکار MIS: توقفات فنی دستگاه ${rawVal} ساعت`;
+        } else {
+          scoreVal = Math.max(0, Math.min(5, Math.round(Number(rec.calculatedKpiScore) * 10) / 10));
+          rawVal = Number(rec.efficiencyRate) || 0;
+          docVal = `داده خودکار MIS: راندمان ${rec.efficiencyRate}٪ | ضایعات ${rec.scrapRate}٪ | کیفیت ${rec.qualityScore}٪`;
+        }
+
+        return { scoreVal, docVal, rawVal };
+      };
 
       if (targetIndex === -1) {
-        const scores = prof.items.map(item => ({
-          cid: item.cid,
-          weight: item.weight,
-          value: 0,
-          self: 0,
-          doc: ''
-        }));
+        const scores = prof.items.map(item => {
+          const crit = criteria.find(c => c.id === item.cid || c.code === item.cid);
+          const effectiveSource = crit?.scoringSource || (crit?.cat === 'K' ? 'mis' : crit?.code.startsWith('B-01') ? 'kasra' : 'supervisor');
+          
+          // STRICT RULE: If criterion source is 'supervisor', do NOT populate from MIS
+          const isMISCrit = crit && effectiveSource === 'mis' && (crit.autoPopulate !== false);
+          
+          let scoreVal = 0;
+          let docVal = '';
+          let rawVal: number | undefined = undefined;
+
+          if (isMISCrit) {
+            const computed = computeScoreForMisCriterion(crit);
+            scoreVal = computed.scoreVal;
+            docVal = computed.docVal;
+            rawVal = computed.rawVal;
+            slotsPopulated++;
+          }
+
+          return {
+            cid: item.cid,
+            weight: item.weight,
+            value: scoreVal,
+            self: 0,
+            doc: docVal,
+            sourceType: isMISCrit ? ('mis' as const) : effectiveSource === 'supervisor' ? ('supervisor' as const) : undefined,
+            autoPopulated: isMISCrit,
+            rawMetricValue: rawVal
+          };
+        });
+
         const newEv: Evaluation = {
           id: `eval-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           empId: emp.id,
           profileId: prof.id,
-          period: rec.period,
+          period: evalPeriod,
           status: 'draft',
+          stage: 'self_review',
+          currentAssigneeId: emp.id,
+          currentAssigneeRole: 'employee',
+          currentAssigneeName: emp.name,
           scores,
-          note: '',
+          note: 'ایجاد شده خودکار از ایمپورت فایل تولید و کیفیت MIS',
           created: Date.now()
         };
         updatedEvaluations.push(newEv);
-        targetIndex = updatedEvaluations.length - 1;
-      }
+        newEvalsCount++;
+      } else {
+        const targetEval = updatedEvaluations[targetIndex];
+        const existingScoreMap = new Map(targetEval.scores.map(s => [s.cid, s]));
 
-      const targetEval = updatedEvaluations[targetIndex];
-      const updatedScores = targetEval.scores.map(s => {
-        const crit = criteria.find(c => c.id === s.cid);
-        const isMISCrit = crit && (crit.cat === 'K' || crit.cat === 'Q' || crit.name.includes('تولید') || crit.name.includes('راندمان') || crit.name.includes('ضایعات'));
-        if (isMISCrit) {
-          return {
-            ...s,
-            value: rec.calculatedKpiScore,
-            doc: `داده MIS: راندمان ${rec.efficiencyRate}٪ | ضایعات ${rec.scrapRate}٪ | کیفیت ${rec.qualityScore}٪`
+        const updatedScores = prof.items.map(item => {
+          const crit = criteria.find(c => c.id === item.cid || c.code === item.cid);
+          const existingScore = existingScoreMap.get(item.cid);
+          const effectiveSource = crit?.scoringSource || (crit?.cat === 'K' ? 'mis' : crit?.code.startsWith('B-01') ? 'kasra' : 'supervisor');
+          
+          // STRICT RULE: If criterion source is 'supervisor', preserve supervisor's evaluation intact!
+          const isMISCrit = crit && effectiveSource === 'mis' && (crit.autoPopulate !== false);
+
+          if (isMISCrit) {
+            const computed = computeScoreForMisCriterion(crit);
+            slotsPopulated++;
+            return {
+              cid: item.cid,
+              weight: item.weight,
+              value: computed.scoreVal,
+              self: existingScore ? existingScore.self : 0,
+              doc: computed.docVal,
+              sourceType: 'mis' as const,
+              autoPopulated: true,
+              rawMetricValue: computed.rawVal
+            };
+          }
+
+          // If supervisor-scored or non-MIS, preserve existing score completely!
+          return existingScore ? { ...existingScore, weight: item.weight } : {
+            cid: item.cid,
+            weight: item.weight,
+            value: 0,
+            self: 0,
+            doc: '',
+            sourceType: effectiveSource === 'supervisor' ? ('supervisor' as const) : undefined
           };
-        }
-        return s;
-      });
+        });
 
-      updatedEvaluations[targetIndex] = { ...targetEval, scores: updatedScores };
-      appliedCount++;
+        updatedEvaluations[targetIndex] = {
+          ...targetEval,
+          profileId: prof.id,
+          scores: updatedScores
+        };
+        updatedEvalsCount++;
+      }
     });
 
+    // Immediate multi-layer persistence
+    db.saveEvaluations(updatedEvaluations);
+    try {
+      localStorage.setItem('pe_evaluations', JSON.stringify(updatedEvaluations));
+    } catch {
+      // Ignore
+    }
     onUpdateEvaluations(updatedEvaluations);
-    setSuccessMessage(`نمرات عملکرد و کیفیت MIS برای ${appliedCount} ارزیابی در لحظه اعمال شد.`);
+
+    const totalProcessed = newEvalsCount + updatedEvalsCount;
+    setValidationSummary({
+      source: 'سامانه تولید و کیفیت MIS',
+      totalProcessed,
+      newEvaluations: newEvalsCount,
+      updatedEvaluations: updatedEvalsCount,
+      slotsPopulated,
+      warnings
+    });
+
+    setSuccessMessage(`✅ داده‌های تولید و کیفیت MIS با موفقیت در شاخص‌های تولیدی ${totalProcessed} پرونده ارزیابی نشست و پایدار شد (${slotsPopulated} اسلات نمره). معیارهای دستی سرپرست بدون تغییر محافظت شدند.`);
   };
 
   // Filtered Dynamic Records for table
@@ -739,6 +1112,70 @@ export default function ExcelIntegrationCenter({
             <button onClick={() => setErrorMessage('')} className="text-rose-400 hover:text-rose-200">
               <X className="w-3.5 h-3.5" />
             </button>
+          </div>
+        )}
+
+        {/* VALIDATION & INJECTION AUDIT REPORT */}
+        {validationSummary && (
+          <div className="mx-6 mt-4 p-4 bg-slate-900/90 border border-teal-500/30 rounded-2xl text-xs space-y-3 shrink-0 animate-fade-in shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-teal-400" />
+                <span className="font-black text-slate-100 text-sm">
+                  گزارش اعتبارسنجی و تزریق به اسلات‌ها ({validationSummary.source})
+                </span>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setValidationSummary(null)} 
+                className="text-slate-400 hover:text-slate-200 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700/60">
+                <span className="text-[11px] text-slate-400 block mb-1">کل پرسنل پردازش‌شده</span>
+                <span className="text-base font-black text-slate-100">{validationSummary.totalProcessed} نفر</span>
+              </div>
+              <div className="bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20">
+                <span className="text-[11px] text-emerald-400 block mb-1">ارزیابی‌های جدید</span>
+                <span className="text-base font-black text-emerald-300">{validationSummary.newEvaluations} پرونده</span>
+              </div>
+              <div className="bg-teal-500/10 p-3 rounded-xl border border-teal-500/20">
+                <span className="text-[11px] text-teal-400 block mb-1">ارزیابی‌های به‌روزرسانی‌شده</span>
+                <span className="text-base font-black text-teal-300">{validationSummary.updatedEvaluations} پرونده</span>
+              </div>
+              <div className="bg-indigo-500/10 p-3 rounded-xl border border-indigo-500/20">
+                <span className="text-[11px] text-indigo-400 block mb-1">اسلات‌های نمره تکمیل‌شده</span>
+                <span className="text-base font-black text-indigo-300">{validationSummary.slotsPopulated} اسلات</span>
+              </div>
+            </div>
+
+            {validationSummary.warnings.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowValidationWarnings(!showValidationWarnings)}
+                  className="flex items-center gap-1.5 text-amber-400 hover:text-amber-300 font-bold text-xs cursor-pointer"
+                >
+                  <AlertTriangle className="w-4 h-4" />
+                  <span>مشاهده هشدارهای اعتبارسنجی اسلات‌ها ({validationSummary.warnings.length} مورد)</span>
+                  <span className="text-[10px] underline">{showValidationWarnings ? 'بستن' : 'نمایش'}</span>
+                </button>
+                {showValidationWarnings && (
+                  <ul className="mt-2 space-y-1.5 max-h-36 overflow-y-auto pr-2 bg-slate-950/60 p-3 rounded-xl border border-amber-500/20 text-slate-300 text-[11px]">
+                    {validationSummary.warnings.map((warn, wIdx) => (
+                      <li key={wIdx} className="flex items-start gap-1.5 text-amber-300/90">
+                        <span className="text-amber-400 font-black">•</span>
+                        <span>{warn}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
         )}
 

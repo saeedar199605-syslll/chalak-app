@@ -168,21 +168,25 @@ export default function Dashboard({
   const calibratedEvals = evaluations.filter(e => e.status === 'calibrated');
   const draftEvals = evaluations.filter(e => e.status === 'draft');
 
-  // Calculate overall performance score for locked/calibrated evals
-  const finalEvals = evaluations.filter(e => e.status === 'locked' || e.status === 'calibrated');
-  
+  // Calculate overall performance score for locked/calibrated evals (or scored evals if none locked yet)
   const calculateScore = (ev: Evaluation) => {
-    const scoredItems = ev.scores.filter(s => s.value > 0);
+    const scoredItems = (ev.scores || []).filter(s => (s.value || 0) > 0);
     if (!scoredItems.length) return 0;
-    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
+    const totalWeight = scoredItems.reduce((acc, curr) => acc + (curr.weight || 1), 0);
     if (totalWeight === 0) return 0;
-    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
-    const avg5 = weightedSum / totalWeight;
-    return Math.round(avg5 * 20 * 10) / 10; // scaled out of 100
+    const weightedSum = scoredItems.reduce((acc, curr) => acc + ((curr.value || 0) * (curr.weight || 1)), 0);
+    const avg = weightedSum / totalWeight;
+    // Support both 1-5 scale and 0-100 percentage scale seamlessly
+    const score100 = avg > 5 ? Math.min(100, avg) : Math.min(100, avg * 20);
+    return Math.round(score100 * 10) / 10;
   };
 
-  const avgPerformance = finalEvals.length
-    ? Math.round(finalEvals.reduce((sum, e) => sum + calculateScore(e), 0) / finalEvals.length * 10) / 10
+  const scoredEvals = evaluations.filter(e => calculateScore(e) > 0);
+  const finalEvals = evaluations.filter(e => e.status === 'locked' || e.status === 'calibrated');
+  const statsEvals = finalEvals.length > 0 ? finalEvals : scoredEvals;
+
+  const avgPerformance = statsEvals.length
+    ? Math.round(statsEvals.reduce((sum, e) => sum + calculateScore(e), 0) / statsEvals.length * 10) / 10
     : 0;
 
   const [radarEmpId, setRadarEmpId] = useState<string>('all');
@@ -210,17 +214,21 @@ export default function Dashboard({
     ];
 
     relevantEvals.forEach(ev => {
-      ev.scores.forEach(s => {
-        const crit = criteria.find(c => c.id === s.cid);
+      (ev.scores || []).forEach(s => {
+        const crit = criteria.find(c => c.id === s.cid || c.code === s.cid);
         if (crit) {
           const cat = crit.cat || 'K';
           const dim = dims.find(d => d.key === cat) || dims[0];
-          if (s.value > 0) {
-            dim.sum += s.value;
+          const rawVal = s.value || 0;
+          const val5 = rawVal > 5 ? Math.min(5, rawVal / 20) : rawVal;
+          if (val5 > 0) {
+            dim.sum += val5;
             dim.count += 1;
           }
           if (s.self && s.self > 0) {
-            dim.selfSum += s.self;
+            const rawSelf = s.self;
+            const selfVal5 = rawSelf > 5 ? Math.min(5, rawSelf / 20) : rawSelf;
+            dim.selfSum += selfVal5;
             dim.selfCount += 1;
           }
         }
@@ -240,10 +248,12 @@ export default function Dashboard({
 
   // Grade Distribution
   const distribution = { A: 0, B: 0, C: 0, D: 0, E: 0 };
-  finalEvals.forEach(ev => {
+  statsEvals.forEach(ev => {
     const score = calculateScore(ev);
-    const grade = getGrade(score);
-    distribution[grade]++;
+    if (score > 0) {
+      const grade = getGrade(score);
+      distribution[grade]++;
+    }
   });
 
   const maxDist = Math.max(1, ...Object.values(distribution));

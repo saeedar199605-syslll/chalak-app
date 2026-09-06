@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Monitor, 
   Clock, 
@@ -19,10 +20,14 @@ import {
   Keyboard, 
   Send, 
   TrendingUp, 
-  Layers,
-  BarChart3,
-  Check,
-  Plus
+  Layers, 
+  BarChart3, 
+  Check, 
+  Plus,
+  Edit2,
+  Trash2,
+  Save,
+  X
 } from 'lucide-react';
 import { 
   Employee, 
@@ -112,6 +117,90 @@ export default function KickidlerProductivityHub({
   const [violSeverity, setViolSeverity] = useState<KickidlerViolation['severity']>('high');
   const [violTitle, setViolTitle] = useState('');
   const [violDescription, setViolDescription] = useState('');
+
+  // Editing and Deleting states for Violations, Records, and Live activities
+  const [editingViolation, setEditingViolation] = useState<KickidlerViolation | null>(null);
+  const [deletingViolation, setDeletingViolation] = useState<KickidlerViolation | null>(null);
+
+  const [editingRecord, setEditingRecord] = useState<WorkdayActivityRecord | null>(null);
+  const [deletingRecord, setDeletingRecord] = useState<WorkdayActivityRecord | null>(null);
+
+  const [editingLive, setEditingLive] = useState<LiveEmployeeActivity | null>(null);
+  const [deletingLiveEmpId, setDeletingLiveEmpId] = useState<string | null>(null);
+
+  const handleSaveEditedViolation = (updated: KickidlerViolation) => {
+    const nextList = violations.map(v => v.id === updated.id ? updated : v);
+    setViolations(nextList);
+    try {
+      localStorage.setItem('pe_kickidler_violations', JSON.stringify(nextList));
+    } catch {}
+    setEditingViolation(null);
+    setNotificationToast(`هشدار انضباطی «${updated.title}» با موفقیت ویرایش شد.`);
+    setTimeout(() => setNotificationToast(null), 3500);
+  };
+
+  const handleDeleteViolation = (id: string) => {
+    const nextList = violations.filter(v => v.id !== id);
+    setViolations(nextList);
+    try {
+      localStorage.setItem('pe_kickidler_violations', JSON.stringify(nextList));
+    } catch {}
+    setDeletingViolation(null);
+    setNotificationToast('هشدار انضباطی با موفقیت از سیستم حذف گردید.');
+    setTimeout(() => setNotificationToast(null), 3500);
+  };
+
+  const handleSaveEditedRecord = (updated: WorkdayActivityRecord) => {
+    // Recalculate productivity index
+    const total = updated.timeBreakdown.totalWorkMinutes || 480;
+    const pei = Math.round((updated.timeBreakdown.productiveMinutes / total) * 100);
+    const finalRecord = { ...updated, productivityIndex: pei };
+
+    const nextList = records.map(r => r.empId === finalRecord.empId ? finalRecord : r);
+    setRecords(nextList);
+    try {
+      localStorage.setItem('pe_kickidler_records', JSON.stringify(nextList));
+    } catch {}
+    setEditingRecord(null);
+    setNotificationToast(`کارنامه زمانی ${finalRecord.empName} با موفقیت ویرایش و شاخص‌ها بازتنظیم شدند.`);
+    setTimeout(() => setNotificationToast(null), 3500);
+  };
+
+  const handleDeleteRecord = (empId: string) => {
+    const nextList = records.filter(r => r.empId !== empId);
+    setRecords(nextList);
+    if (selectedRecordEmpId === empId) {
+      setSelectedRecordEmpId(nextList[0]?.empId || '');
+    }
+    try {
+      localStorage.setItem('pe_kickidler_records', JSON.stringify(nextList));
+    } catch {}
+    setDeletingRecord(null);
+    setNotificationToast('رکورد کارنامه زمانی پرسنل با موفقیت حذف شد.');
+    setTimeout(() => setNotificationToast(null), 3500);
+  };
+
+  const handleSaveEditedLive = (updated: LiveEmployeeActivity) => {
+    const nextList = liveActivities.map(l => l.empId === updated.empId ? updated : l);
+    setLiveActivities(nextList);
+    try {
+      localStorage.setItem('pe_kickidler_live', JSON.stringify(nextList));
+    } catch {}
+    setEditingLive(null);
+    setNotificationToast(`وضعیت فعالیت زنده ${updated.empName} با موفقیت به‌روزرسانی شد.`);
+    setTimeout(() => setNotificationToast(null), 3500);
+  };
+
+  const handleDeleteLive = (empId: string) => {
+    const nextList = liveActivities.filter(l => l.empId !== empId);
+    setLiveActivities(nextList);
+    try {
+      localStorage.setItem('pe_kickidler_live', JSON.stringify(nextList));
+    } catch {}
+    setDeletingLiveEmpId(null);
+    setNotificationToast('شاغل موردنظر از پایش مانیتورینگ زنده حذف شد.');
+    setTimeout(() => setNotificationToast(null), 3500);
+  };
 
   // Live simulation tick (to give realistic live monitoring feel)
   useEffect(() => {
@@ -247,7 +336,7 @@ export default function KickidlerProductivityHub({
       case 'offline':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold text-slate-500 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-            <span>آفلاین / خارج از شیفت</span>
+            <span>غیرفعال / خارج از شیفت</span>
           </span>
         );
     }
@@ -514,6 +603,28 @@ export default function KickidlerProductivityHub({
                   >
                     <BarChart3 className="w-3.5 h-3.5" />
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEditingLive(JSON.parse(JSON.stringify(item)))}
+                    className={`p-1.5 rounded-xl border text-[11px] font-bold cursor-pointer transition ${
+                      theme === 'dark' ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-teal-300' : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-teal-700'
+                    }`}
+                    title="ویرایش مشخصات و وضعیت پایش زنده"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeletingLiveEmpId(item.empId)}
+                    className={`p-1.5 rounded-xl border text-[11px] font-bold cursor-pointer transition ${
+                      theme === 'dark' ? 'bg-slate-800 hover:bg-rose-900/40 border-slate-700 text-rose-400' : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                    }`}
+                    title="حذف از پایش زنده"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             ))}
@@ -569,8 +680,8 @@ export default function KickidlerProductivityHub({
                 </p>
               </div>
 
-              {/* Productivity Index Score Badge */}
-              <div className="flex items-center gap-4">
+              {/* Productivity Index Score Badge & Edit/Delete Record */}
+              <div className="flex items-center gap-4 flex-wrap">
                 <div className="text-left space-y-0.5">
                   <div className={`text-xs font-bold ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>شاخص راندمان بهره‌وری (PEI)</div>
                   <div className="text-3xl font-black font-mono text-teal-600 dark:text-teal-400">
@@ -579,6 +690,36 @@ export default function KickidlerProductivityHub({
                 </div>
                 <div className="w-12 h-12 rounded-2xl bg-teal-500/20 border border-teal-500/30 flex items-center justify-center text-teal-500">
                   <Activity className="w-6 h-6" />
+                </div>
+
+                <div className="flex items-center gap-1.5 border-r pr-3 mr-1 border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => setEditingRecord(JSON.parse(JSON.stringify(selectedRecord)))}
+                    className={`p-2 rounded-xl border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                      theme === 'dark' 
+                        ? 'bg-slate-800 hover:bg-teal-900/40 border-slate-700 text-teal-300' 
+                        : 'bg-teal-50 hover:bg-teal-100 border-teal-200 text-teal-700'
+                    }`}
+                    title="ویرایش مقادیر و زمان‌های کارنامه"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">ویرایش کارنامه</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeletingRecord(selectedRecord)}
+                    className={`p-2 rounded-xl border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                      theme === 'dark' 
+                        ? 'bg-slate-800 hover:bg-rose-900/40 border-slate-700 text-rose-400' 
+                        : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                    }`}
+                    title="حذف این رکورد کارنامه"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">حذف</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -810,6 +951,33 @@ export default function KickidlerProductivityHub({
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> مختومه شده
                     </span>
                   )}
+
+                  {/* Edit & Delete buttons */}
+                  <button
+                    type="button"
+                    onClick={() => setEditingViolation(JSON.parse(JSON.stringify(viol)))}
+                    className={`p-1.5 rounded-xl border text-xs font-bold cursor-pointer transition ${
+                      theme === 'dark' 
+                        ? 'bg-slate-800/80 hover:bg-slate-700 border-slate-700 text-teal-300' 
+                        : 'bg-teal-50 hover:bg-teal-100 border-teal-200 text-teal-700'
+                    }`}
+                    title="ویرایش هشدار انضباطی"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeletingViolation(viol)}
+                    className={`p-1.5 rounded-xl border text-xs font-bold cursor-pointer transition ${
+                      theme === 'dark' 
+                        ? 'bg-slate-800/80 hover:bg-rose-900/40 border-slate-700 text-rose-400' 
+                        : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                    }`}
+                    title="حذف هشدار انضباطی"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             ))}
@@ -1113,6 +1281,460 @@ export default function KickidlerProductivityHub({
             </form>
           </div>
         </div>
+      )}
+
+      {/* DELETE VIOLATION MODAL */}
+      {deletingViolation && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 text-right my-auto">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2.5 bg-rose-500/10 rounded-xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100">حذف هشدار انضباطی</h3>
+                <p className="text-xs text-slate-400">{deletingViolation.empName} ({deletingViolation.empCode})</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed">
+              آیا از حذف هشدار <span className="font-bold text-white">«{deletingViolation.title}»</span> اطمینان دارید؟ این عملیات قابل بازگشت نیست.
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingViolation(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteViolation(deletingViolation.id)}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-rose-600/20 cursor-pointer"
+              >
+                تایید و حذف قطعی
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* EDIT VIOLATION MODAL */}
+      {editingViolation && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className={`relative w-full max-w-lg rounded-2xl border p-6 shadow-2xl space-y-4 my-auto ${
+            theme === 'dark' ? 'bg-slate-900 border-teal-500/30 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
+          }`}>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-teal-400">
+                <Edit2 className="w-5 h-5" />
+                <h3 className="text-base font-bold">ویرایش هشدار انضباطی کیک‌ایدلر</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingViolation(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold mb-1">عنوان هشدار / تخلف:</label>
+                <input
+                  type="text"
+                  value={editingViolation.title}
+                  onChange={e => setEditingViolation({ ...editingViolation, title: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">توضیحات و گزارش کارشناس:</label>
+                <textarea
+                  rows={2}
+                  value={editingViolation.description}
+                  onChange={e => setEditingViolation({ ...editingViolation, description: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold mb-1">سطح شدت:</label>
+                  <select
+                    value={editingViolation.severity}
+                    onChange={e => setEditingViolation({ ...editingViolation, severity: e.target.value as any })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="low">کم (تذکر شفاهی)</option>
+                    <option value="medium">متوسط (هشدار سیستمی)</option>
+                    <option value="high">بالا (کسر از کارنامه)</option>
+                    <option value="critical">بحرانی (کمیته انضباطی)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">وضعیت رسیدگی:</label>
+                  <select
+                    value={editingViolation.status}
+                    onChange={e => setEditingViolation({ ...editingViolation, status: e.target.value as any })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="new">جدید (بررسی‌نشده)</option>
+                    <option value="acknowledged">تایید و تذکر داده‌شده</option>
+                    <option value="addressed">مختومه شده</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingViolation(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveEditedViolation(editingViolation)}
+                className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-teal-600/20 cursor-pointer"
+              >
+                <Save className="w-4 h-4" /> ذخیره تغییرات
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* DELETE RECORD MODAL */}
+      {deletingRecord && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 text-right my-auto">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2.5 bg-rose-500/10 rounded-xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100">حذف کارنامه زمانی شاغل</h3>
+                <p className="text-xs text-slate-400">{deletingRecord.empName} ({deletingRecord.empCode})</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed">
+              آیا از حذف داده‌های کارنامه بهره‌وری زمانی <span className="font-bold text-white">«{deletingRecord.empName}»</span> برای تاریخ {deletingRecord.date} اطمینان دارید؟
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingRecord(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteRecord(deletingRecord.empId)}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-rose-600/20 cursor-pointer"
+              >
+                تایید و حذف قطعی
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* EDIT RECORD MODAL */}
+      {editingRecord && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className={`relative w-full max-w-lg rounded-2xl border p-6 shadow-2xl space-y-4 my-auto ${
+            theme === 'dark' ? 'bg-slate-900 border-teal-500/30 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
+          }`}>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-teal-400">
+                <Edit2 className="w-5 h-5" />
+                <h3 className="text-base font-bold">ویرایش کارنامه زمانی و بهره‌وری: {editingRecord.empName}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingRecord(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold mb-1 text-emerald-400">زمان مولد (دقیقه):</label>
+                  <input
+                    type="number"
+                    value={editingRecord.timeBreakdown.productiveMinutes}
+                    onChange={e => {
+                      const productiveMinutes = Number(e.target.value);
+                      setEditingRecord({
+                        ...editingRecord,
+                        timeBreakdown: { ...editingRecord.timeBreakdown, productiveMinutes }
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1 text-amber-400">زمان اداری / خنثی (دقیقه):</label>
+                  <input
+                    type="number"
+                    value={editingRecord.timeBreakdown.neutralMinutes}
+                    onChange={e => {
+                      const neutralMinutes = Number(e.target.value);
+                      setEditingRecord({
+                        ...editingRecord,
+                        timeBreakdown: { ...editingRecord.timeBreakdown, neutralMinutes }
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold mb-1 text-rose-400">زمان غیرمولد (دقیقه):</label>
+                  <input
+                    type="number"
+                    value={editingRecord.timeBreakdown.unproductiveMinutes}
+                    onChange={e => {
+                      const unproductiveMinutes = Number(e.target.value);
+                      setEditingRecord({
+                        ...editingRecord,
+                        timeBreakdown: { ...editingRecord.timeBreakdown, unproductiveMinutes }
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1 text-slate-400">زمان عدم فعالیت / Idle (دقیقه):</label>
+                  <input
+                    type="number"
+                    value={editingRecord.timeBreakdown.idleMinutes}
+                    onChange={e => {
+                      const idleMinutes = Number(e.target.value);
+                      setEditingRecord({
+                        ...editingRecord,
+                        timeBreakdown: { ...editingRecord.timeBreakdown, idleMinutes }
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 pt-2 border-t border-slate-800">
+                <div>
+                  <label className="block font-bold mb-1 text-[11px]">مجموع شیفت (دقیقه):</label>
+                  <input
+                    type="number"
+                    value={editingRecord.timeBreakdown.totalWorkMinutes}
+                    onChange={e => {
+                      const totalWorkMinutes = Number(e.target.value);
+                      setEditingRecord({
+                        ...editingRecord,
+                        timeBreakdown: { ...editingRecord.timeBreakdown, totalWorkMinutes }
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-slate-200 font-mono text-xs focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1 text-[11px]">تعداد کلیدها (کیبورد):</label>
+                  <input
+                    type="number"
+                    value={editingRecord.keystrokesCount}
+                    onChange={e => setEditingRecord({ ...editingRecord, keystrokesCount: Number(e.target.value) })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-slate-200 font-mono text-xs focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1 text-[11px]">تعداد کلیک ماوس:</label>
+                  <input
+                    type="number"
+                    value={editingRecord.mouseClicksCount}
+                    onChange={e => setEditingRecord({ ...editingRecord, mouseClicksCount: Number(e.target.value) })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-slate-200 font-mono text-xs focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingRecord(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveEditedRecord(editingRecord)}
+                className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-teal-600/20 cursor-pointer"
+              >
+                <Save className="w-4 h-4" /> ذخیره تغییرات کارنامه
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* EDIT LIVE ACTIVITY MODAL */}
+      {editingLive && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className={`relative w-full max-w-md rounded-2xl border p-6 shadow-2xl space-y-4 my-auto ${
+            theme === 'dark' ? 'bg-slate-900 border-teal-500/30 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
+          }`}>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-teal-400">
+                <Edit2 className="w-5 h-5" />
+                <h3 className="text-base font-bold">ویرایش پایش زنده: {editingLive.empName}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingLive(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold mb-1">وضعیت مانیتورینگ زنده:</label>
+                <select
+                  value={editingLive.status}
+                  onChange={e => setEditingLive({ ...editingLive, status: e.target.value as any })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500"
+                >
+                  <option value="productive">مولد و فعال (Productive)</option>
+                  <option value="neutral">خنثی / اداری (Neutral)</option>
+                  <option value="idle">دور از سیستم (Idle)</option>
+                  <option value="offline">آفلاین / خارج از شیفت (Offline)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">پنجره / اپلیکیشن فعال:</label>
+                <input
+                  type="text"
+                  value={editingLive.currentApp}
+                  onChange={e => setEditingLive({ ...editingLive, currentApp: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">دسته‌بندی نرم‌افزار:</label>
+                <input
+                  type="text"
+                  value={editingLive.currentAppCategory}
+                  onChange={e => setEditingLive({ ...editingLive, currentAppCategory: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold mb-1">نرخ بهره‌وری امروز (٪):</label>
+                  <input
+                    type="number"
+                    value={editingLive.todayProductivityRate}
+                    onChange={e => setEditingLive({ ...editingLive, todayProductivityRate: Number(e.target.value) })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">زمان بی‌کاری (دقیقه):</label>
+                  <input
+                    type="number"
+                    value={editingLive.todayIdleMinutes}
+                    onChange={e => setEditingLive({ ...editingLive, todayIdleMinutes: Number(e.target.value) })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 font-mono focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingLive(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveEditedLive(editingLive)}
+                className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-teal-600/20 cursor-pointer"
+              >
+                <Save className="w-4 h-4" /> ذخیره
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* DELETE LIVE ACTIVITY CONFIRMATION MODAL */}
+      {deletingLiveEmpId && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 text-right my-auto">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2.5 bg-rose-500/10 rounded-xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-slate-100">حذف شاغل از پایش زنده</h3>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed">
+              آیا از حذف این شاغل از مانیتورینگ زنده کیک‌ایدلر اطمینان دارید؟
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingLiveEmpId(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteLive(deletingLiveEmpId)}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-rose-600/20 cursor-pointer"
+              >
+                تایید و حذف
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
