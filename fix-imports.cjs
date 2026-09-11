@@ -1,33 +1,22 @@
 const fs = require('fs');
+const files = [
+  'src/components/Calibration.tsx',
+  'src/components/Dashboard.tsx',
+  'src/components/Evaluations.tsx',
+  'src/components/MyEvaluation.tsx',
+  'src/components/Reports.tsx',
+  'src/components/RewardCalculationCenter.tsx',
+  'src/components/WorkflowManager.tsx'
+];
 
-['src/components/Evaluations.tsx', 'src/components/MyEvaluation.tsx'].forEach(file => {
-  let code = fs.readFileSync(file, 'utf-8');
-  
-  if (!code.includes('import { db }')) {
-    code = code.replace(
-      /from '\.\.\/types';/,
-      "from '../types';\nimport { db } from '../utils/db';"
-    );
+files.forEach(f => {
+  let content = fs.readFileSync(f, 'utf-8');
+  if (!content.includes('calculateFinalScore')) {
+    content = content.replace("import { Evaluation,", "import { calculateFinalScore } from '../utils/formulaEngine';\nimport { Evaluation,");
+    if (!content.includes('calculateFinalScore')) {
+      content = content.replace("import { Employee,", "import { calculateFinalScore } from '../utils/formulaEngine';\nimport { Employee,");
+    }
+    fs.writeFileSync(f, content);
+    console.log('Fixed', f);
   }
-  if (!code.includes('RewardConfig')) {
-    code = code.replace(
-      /from '\.\.\/types';/,
-      ", RewardConfig } from '../types';"
-    );
-  }
-  if (!code.includes('import { useEffect')) {
-    code = code.replace(
-      /import React, \{ useState/g,
-      "import React, { useState, useEffect"
-    );
-  }
-  if (!code.includes('import { useMemo')) {
-    code = code.replace(
-      /import React, \{ useState/g,
-      "import React, { useState, useMemo"
-    );
-  }
-
-  fs.writeFileSync(file, code);
 });
-console.log('Fixed imports');
