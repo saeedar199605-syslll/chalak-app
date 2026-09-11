@@ -200,6 +200,7 @@ export const JobProfileInputSchema = z.object({
   title: z.string().min(2, 'عنوان شغل باید حداقل ۲ کاراکتر باشد.').max(150),
   code: z.string().min(1, 'کد شغل الزامی است.').max(30),
   family: z.string().min(1, 'خانواده شغلی الزامی است.').max(50),
+  baseRewardAmount: z.number().optional(),
   locked: z.boolean().default(false),
   items: z.array(ProfileItemSchema).min(1, 'پروفایل شغلی باید حداقل شامل یک شاخص باشد.')
 });
@@ -212,6 +213,7 @@ export function sanitizeJobProfileData(data: any): any {
     code: sanitizeInputString(data.code).toUpperCase(),
     family: sanitizeInputString(data.family),
     locked: Boolean(data.locked),
+    baseRewardAmount: data.baseRewardAmount ? Number(data.baseRewardAmount) : undefined,
     items: Array.isArray(data.items) ? data.items.map((it: any) => ({
       cid: sanitizeInputString(it?.cid),
       weight: typeof it?.weight === 'number' ? it.weight : Number(it?.weight) || 0

@@ -16,6 +16,7 @@ import Login from './components/Login';
 import Onboarding from './components/Onboarding';
 import MyEvaluation from './components/MyEvaluation';
 import ManagementCenter from './components/ManagementCenter';
+import RewardCalculationCenter from './components/RewardCalculationCenter';
 import WorkflowManager from './components/WorkflowManager';
 import SupervisorNotificationBell from './components/SupervisorNotificationBell';
 import LatticePerformanceHub from './components/LatticePerformanceHub';
@@ -692,6 +693,7 @@ export default function App() {
       case 'evaluations': return 'فرم‌های ارزیابی';
       case 'calibration': return 'کالیبراسیون عملکرد';
       case 'reports': return 'گزارشات سازمانی';
+      case 'rewards': return 'محاسبات ریالی و پاداش';
       case 'lattice-hub': return 'مدیریت اهداف و استعدادها (Lattice)';
       case 'kickidler-hub': return 'پایش بهره‌وری و زمان کار (Kickidler)';
       case 'onboarding': return 'آموزش سیستم';
@@ -877,6 +879,7 @@ export default function App() {
           )}
           {currentTab === 'onboarding' && <Onboarding currentUser={currentUser} onComplete={() => { if (currentUser) localStorage.setItem('pe_onboarded_' + currentUser.id, 'true'); if (currentUser && currentUser.role === 'employee') setCurrentTab('my-evaluation'); else setCurrentTab('dashboard'); }} hasCertifiedBadge={hasCertifiedBadge} onGrantBadge={() => setHasCertifiedBadge(true)} theme={theme} />}
           {currentTab === 'my-evaluation' && <MyEvaluation currentUser={currentUser} evaluations={evaluations} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onAddEvaluation={handleAddEvaluation} theme={theme} />}
+          {currentTab === 'rewards' && currentUser.role === 'admin' && <RewardCalculationCenter evaluations={evaluations} employees={employees} profiles={profiles} theme={theme} onBulkUpdateEvaluations={handleBulkUpdateEvaluations} />}
           {currentTab === 'settings' && (
             currentUser.role === 'admin' ? (
               <ManagementCenter 

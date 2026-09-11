@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Sparkles, 
@@ -19,7 +19,8 @@ import {
   GitFork,
   Check
 } from 'lucide-react';
-import { Employee, Evaluation, JobProfile, Criterion, getGrade, GRADE_DETAILS, WORKFLOW_STAGES, WorkflowTransitionLog, WorkflowStageKey } from '../types';
+import { Employee, Evaluation, JobProfile, Criterion, getGrade, GRADE_DETAILS, WORKFLOW_STAGES, WorkflowTransitionLog, WorkflowStageKey , RewardConfig } from '../types';
+import { db } from '../utils/db';
 
 interface MyEvaluationProps {
   currentUser: Employee;
@@ -46,6 +47,54 @@ export default function MyEvaluation({
   // Find or create evaluation for this employee
   let userEval = evaluations.find(e => e.empId === currentUser.id && e.period === period);
   const userProfile = profiles.find(p => p.id === currentUser.profileId);
+  const [rewardConfig, setRewardConfig] = useState<RewardConfig | null>(null);
+  useEffect(() => {
+    const fetchConfig = () => {
+      const cfg = db.getMiscData<RewardConfig>('pe_reward_config', { coefficients: [], multipliers: [] });
+      setRewardConfig(cfg);
+    };
+    fetchConfig();
+    window.addEventListener('pe_reward_config_updated', fetchConfig);
+    return () => window.removeEventListener('pe_reward_config_updated', fetchConfig);
+  }, []);
+
+  const calculateScore = (ev: Evaluation) => {
+    if (!ev || !ev.scores || !Array.isArray(ev.scores)) return 0;
+    const scoredItems = ev.scores.filter(s => s.value > 0);
+    if (!scoredItems.length) return 0;
+    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
+    if (totalWeight === 0) return 0;
+    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
+    const avg5 = weightedSum / totalWeight;
+    return Math.round(avg5 * 20 * 10) / 10;
+  };
+
+  const currentScore = userEval ? calculateScore(userEval) : 0;
+  
+  
+  const evaluateFormula = (formula: string, variables: Record<string, number>) => {
+    try {
+      const keys = Object.keys(variables);
+      const values = Object.values(variables);
+      const func = new Function(...keys, `return ${formula};`);
+      return Number(func(...values)) || 0;
+    } catch (e) {
+      return 0;
+    }
+  };
+
+  const projectedReward = useMemo(() => {
+    if (!rewardConfig || !userProfile || currentScore === 0) return 0;
+    const m = rewardConfig.multipliers.find(m => currentScore >= m.minScore && currentScore <= (m.maxScore === 100 ? 100 : m.maxScore));
+    const mult = m ? m.multiplier : 0;
+    let baseAmount = userProfile.baseRewardAmount;
+    if (!baseAmount || baseAmount === 0) {
+      const specific = rewardConfig.coefficients.find(c => c.jobFamily === userProfile.family);
+      baseAmount = specific ? specific.baseAmount : (rewardConfig.coefficients.find(c => c.jobFamily === 'all')?.baseAmount || 0);
+    }
+    return evaluateFormula(rewardConfig.formula || 'baseAmount * multiplier', { score: finalScore, baseAmount, multiplier: mult });
+  }, [currentScore, rewardConfig, userProfile]);
+  
 
   const handleSelfScoreChange = (criterionId: string, scoreValue: number) => {
     if (!userEval) {

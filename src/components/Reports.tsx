@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
+import * as XLSX from 'xlsx';
 import { 
   TrendingUp, 
   Download, 
@@ -23,6 +24,7 @@ import { Evaluation, Employee, JobProfile, Criterion, CATEGORIES, getGrade, GRAD
 import RadarChartD3, { CompetencyDimensionData } from './RadarChartD3';
 import NineBoxAIAnalysis from './NineBoxAIAnalysis';
 import { downloadWorkflowCalendarICS, DEFAULT_WORKFLOW_DEADLINES } from '../utils/calendarExport';
+import { db } from '../utils/db';
 
 interface ReportsProps {
   evaluations: Evaluation[];
@@ -203,6 +205,78 @@ export default function Reports({
   };
 
   // 3. Trigger CSV Download
+  
+  
+  const rewardConfig = db.getMiscData('pe_reward_config', {
+    formula: 'baseAmount * multiplier',
+    coefficients: [{ jobFamily: 'all', baseAmount: 10000000 }],
+    multipliers: [{ minScore: 0, maxScore: 100, multiplier: 1 }]
+  });
+
+  const evaluateFormula = (formula: string, variables: Record<string, number>) => {
+    try {
+      const keys = Object.keys(variables);
+      const values = Object.values(variables);
+      const func = new Function(...keys, `return ${formula};`);
+      return Number(func(...values)) || 0;
+    } catch (e) {
+      return 0;
+    }
+  };
+
+  const getReward = (score: number, jobFamily: string, baseRewardAmount?: number) => {
+    let baseAmount = baseRewardAmount;
+    if (!baseAmount) {
+      const specific = rewardConfig.coefficients.find(c => c.jobFamily === jobFamily);
+      baseAmount = specific ? specific.baseAmount : (rewardConfig.coefficients.find(c => c.jobFamily === 'all')?.baseAmount || 0);
+    }
+    const m = rewardConfig.multipliers.find(m => score >= m.minScore && score <= (m.maxScore === 100 ? 100 : m.maxScore));
+    const multiplier = m ? m.multiplier : 0;
+    return evaluateFormula(rewardConfig.formula || 'baseAmount * multiplier', { score, baseAmount, multiplier });
+  };
+
+  const handleExportAggregatedExcel = () => {
+    if (evaluations.length === 0) {
+      alert('داده‌ای برای خروجی وجود ندارد.');
+      return;
+    }
+
+    const exportRows = evaluations.map(ev => {
+      const emp = employees.find(e => e.id === ev.empId);
+      const prof = profiles.find(p => p.id === ev.profileId);
+      const score = calculateScore(ev);
+      // Determine unit and supervisor based on emp data or defaults
+      const unit = emp ? emp.unit : 'نامشخص';
+      const superName = emp?.supervisorId ? employees.find(e => e.id === emp.supervisorId)?.name : 'نامشخص';
+      
+      return {
+        'کد پرسنلی': emp?.code || '---',
+        'نام پرسنل': emp?.name || '---',
+        'واحد سازمانی': unit,
+        'نام سرپرست/مدیر': superName,
+        'سمت سازمانی': prof?.title || '---',
+        'دوره ارزیابی': ev.period,
+        'نمره نهایی': score,
+        'مبلغ پاداش (ریال)': getReward(score, prof?.family || emp?.unit || 'all', prof?.baseRewardAmount),
+        'وضعیت پرونده': ev.status === 'locked' ? 'بسته شده' : ev.status === 'calibrated' ? 'کالیبره شده' : 'پیش‌نویس/جاری'
+      };
+    });
+
+    // Sort by unit then supervisor
+    exportRows.sort((a, b) => {
+      if (a['واحد سازمانی'] < b['واحد سازمانی']) return -1;
+      if (a['واحد سازمانی'] > b['واحد سازمانی']) return 1;
+      if (a['نام سرپرست/مدیر'] < b['نام سرپرست/مدیر']) return -1;
+      if (a['نام سرپرست/مدیر'] > b['نام سرپرست/مدیر']) return 1;
+      return 0;
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'گزارش تجمیعی');
+    XLSX.writeFile(workbook, `Aggregated_Report_AllPeriods_${Date.now()}.xlsx`);
+  };
+  
   const handleExportCSV = () => {
     if (ratedEvals.length === 0) {
       alert('داده‌ای برای خروجی گرفتن موجود نیست.');

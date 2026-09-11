@@ -92,6 +92,7 @@ export interface JobProfile {
   family: string; // e.g., B (Blue-collar), W (White-collar)
   locked: boolean;
   items: ProfileItem[];
+  baseRewardAmount?: number;
 }
 
 export type UserRole = 'admin' | 'supervisor' | 'employee';
@@ -308,6 +309,7 @@ export interface Evaluation {
   currentAssigneeName?: string;
   currentAssigneeRole?: UserRole;
   history?: WorkflowTransitionLog[]; // Audit trail of stage movements
+  finalReward?: number; // Calculated financial reward based on score
   rejectionReason?: string;
   scores: ScoreItem[];
   potentialScore?: number; // 1 to 5 for 9-Box Grid
@@ -688,4 +690,21 @@ export interface SupportTicket {
   createdAt: string;
   updatedAt: string;
   replies: { id: string; senderId: string; senderName: string; message: string; createdAt: string; isAdmin: boolean }[];
+}
+
+export interface RewardCoefficient {
+  jobFamily: string; // "all" for default, or specific family like "تولید"
+  baseAmount: number; // Base reward in IRR/Toman
+}
+
+export interface PerformanceMultiplier {
+  minScore: number;
+  maxScore: number;
+  multiplier: number;
+}
+
+export interface RewardConfig {
+  formula?: string;
+  coefficients: RewardCoefficient[];
+  multipliers: PerformanceMultiplier[];
 }

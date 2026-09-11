@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   ClipboardCheck, 
@@ -50,7 +50,8 @@ import {
   getGrade, 
   GRADE_DETAILS,
   CYCLE_STEPS
-} from '../types';
+, RewardConfig } from '../types';
+import { db } from '../utils/db';
 import { VirtualizedTable } from './VirtualizedTable';
 
 const generateLocalCoachingFeedback = (
@@ -465,6 +466,47 @@ export default function Evaluations({
   };
 
   const finalScore = activeEval ? calculateScore(activeEval) : 0;
+
+  const [rewardConfig, setRewardConfig] = React.useState<RewardConfig | null>(null);
+  React.useEffect(() => {
+    const fetchConfig = () => {
+      const cfg = db.getMiscData<RewardConfig>('pe_reward_config', { coefficients: [], multipliers: [] });
+      setRewardConfig(cfg);
+    };
+    fetchConfig();
+    window.addEventListener('pe_reward_config_updated', fetchConfig);
+    return () => window.removeEventListener('pe_reward_config_updated', fetchConfig);
+  }, []);
+
+  
+  const evaluateFormula = (formula: string, variables: Record<string, number>) => {
+    try {
+      const keys = Object.keys(variables);
+      const values = Object.values(variables);
+      const func = new Function(...keys, `return ${formula};`);
+      return Number(func(...values)) || 0;
+    } catch (e) {
+      return 0;
+    }
+  };
+
+  const projectedReward = React.useMemo(() => {
+    if (!rewardConfig || !activeEval || finalScore === 0) return 0;
+    const emp = employees.find(e => e.id === activeEval.empId);
+    const prof = profiles.find(p => p.id === activeEval.profileId);
+    if (!emp || !prof) return 0;
+    
+    const m = rewardConfig.multipliers.find(m => finalScore >= m.minScore && finalScore <= (m.maxScore === 100 ? 100 : m.maxScore));
+    const mult = m ? m.multiplier : 0;
+    
+    let baseAmount = prof.baseRewardAmount;
+    if (!baseAmount || baseAmount === 0) {
+      const specific = rewardConfig.coefficients.find(c => c.jobFamily === prof.family);
+      baseAmount = specific ? specific.baseAmount : (rewardConfig.coefficients.find(c => c.jobFamily === 'all')?.baseAmount || 0);
+    }
+    return evaluateFormula(rewardConfig.formula || 'baseAmount * multiplier', { score: finalScore, baseAmount, multiplier: mult });
+  }, [finalScore, rewardConfig, activeEval, employees, profiles]);
+  
   const grade = finalScore > 0 ? getGrade(finalScore) : null;
   const gradeConfig = grade ? GRADE_DETAILS[grade] : null;
 
@@ -788,9 +830,15 @@ export default function Evaluations({
                 const crit = criteria.find(c => c.id === score.cid);
                 if (!crit) return null;
 
+                
+                
                 const isSpecial = NEED_DOCUMENT_SCORES.includes(score.value);
                 const hasDoc = score.doc && score.doc.trim().length > 5;
                 const docRequiredButEmpty = isSpecial && !hasDoc;
+                
+                const weightedSum = activeEval.scores.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
+                const itemShare = weightedSum > 0 ? ((score.value * score.weight) / weightedSum) * projectedReward : 0;
+
 
                 return (
                   <div key={score.cid} className="bg-slate-900/40 border border-slate-800/60 rounded-xl p-4 space-y-3.5 hover:border-slate-700/50 transition-all">

@@ -100,6 +100,7 @@ export default function Sidebar({
       items: [
         { id: 'calibration', label: 'کالیبراسیون نمرات', icon: Scale, roles: ['admin'] },
         { id: 'reports', label: 'تحلیل‌ها و ماتریس ۹-Box', icon: TrendingUp, roles: ['admin', 'supervisor', 'employee'], permission: 'view_all_reports' },
+        { id: 'rewards', label: 'محاسبات ریالی پاداش', icon: Calculator, roles: ['admin'] },
         { id: 'settings', label: 'مرکز مدیریت و امنیت', icon: LockKeyhole, roles: ['admin'] },
         { id: 'onboarding', label: 'آموزش بدو ورود', icon: BookOpen, roles: ['admin', 'supervisor', 'employee'] },
       ]
