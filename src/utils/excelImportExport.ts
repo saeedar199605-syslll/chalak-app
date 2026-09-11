@@ -78,7 +78,7 @@ export function downloadKasraExcelTemplate(employees: Employee[], period: string
   if (sampleRows.length === 0) {
     sampleRows.push([
       'EMP-1001',
-      'علی رضایی',
+      'کارمند نمونه',
       period,
       960,
       15,
@@ -143,7 +143,7 @@ export function downloadMISExcelTemplate(employees: Employee[], period: string =
   if (sampleRows.length === 0) {
     sampleRows.push([
       'EMP-1001',
-      'علی رضایی',
+      'کارمند نمونه',
       period,
       12500,
       12000,
@@ -263,7 +263,7 @@ export function downloadDynamicCriteriaExcelTemplate({
   if (rows.length === 0) {
     const defaultRow: any[] = [
       'EMP-1001',
-      'علی رضایی',
+      'کارمند نمونه',
       'کارشناس تولید و فرآیند',
       'واحد سالن پرس و برش',
       period

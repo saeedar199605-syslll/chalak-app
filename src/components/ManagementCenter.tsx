@@ -154,7 +154,36 @@ export default function ManagementCenter({
     return [];
   });
 
+  
   const [userToDelete, setUserToDelete] = useState<Employee | null>(null);
+  const [selectedEmpIds, setSelectedEmpIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleteEmpModalOpen, setIsBulkDeleteEmpModalOpen] = useState(false);
+
+  const handleToggleSelectEmp = (id: string) => {
+    const next = new Set(selectedEmpIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedEmpIds(next);
+  };
+  const handleToggleSelectAllEmps = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      setSelectedEmpIds(new Set(employees.map(e => e.id)));
+    } else {
+      setSelectedEmpIds(new Set());
+    }
+  };
+  const handleConfirmBulkDeleteEmps = () => {
+    if (selectedEmpIds.size === 0) return;
+    const remaining = employees.filter(e => !selectedEmpIds.has(e.id));
+    onUpdateEmployees(remaining);
+    db.saveMiscData('pe_audit_logs', [
+      { id: Date.now().toString(), date: new Date().toISOString(), user: currentUser.name, action: 'bulk_delete_users', details: 'حذف گروهی ' + selectedEmpIds.size + ' کاربر' },
+      ...(db.getMiscData<any[]>('pe_audit_logs', []))
+    ]);
+    setSelectedEmpIds(new Set());
+    setIsBulkDeleteEmpModalOpen(false);
+  };
+
 
   useEffect(() => {
     localStorage.setItem('pe_user_passwords', JSON.stringify(userPasswords));
@@ -1070,7 +1099,7 @@ export default function ManagementCenter({
 
     if (entity === 'employees') {
       templateRows.push('نام و نام خانوادگی,کد پرسنلی,واحد سازمانی,عنوان رده شغلی,نقش کاربری,نام کاربری,کد پرسنلی سرپرست مستقیم,کد پرسنلی ارزیاب همتا,کد پرسنلی تصویب‌کننده');
-      templateRows.push('مهندس علی رضایی,EMP-1001,سالن ماشین‌کاری ۱,اپراتور ارشد تراشکاری CNC,کارمند,ali_rezaei,EMP-1008,EMP-1002,EMP-1008');
+      templateRows.push('کارمند نمونه,EMP-1001,سالن ماشین‌کاری ۱,اپراتور ارشد تراشکاری CNC,کارمند,emp_demo,EMP-1008,EMP-1002,EMP-1008');
       templateRows.push('مهندس کامران صباغی,EMP-1008,سالن ماشین‌کاری ۱,سرپرست تولید و ماشین‌کاری,سرپرست,kamran,,,');
       templateRows.push('مهندس سارا عباسی,EMP-1002,واحد کنترل کیفیت QC,کارشناس ارشد کنترل کیفیت,کارمند,sara_abbasi,EMP-1008,,EMP-1008');
     } else if (entity === 'criteria') {
@@ -1084,7 +1113,7 @@ export default function ManagementCenter({
       templateRows.push('سرپرست مونتاژ و بسته‌بندی,SUP-MN-01,تولید و عملیات,K-PRD-01(30%) | B-HSE-01(25%) | B-LEAD-01(25%) | K-EFF-01(20%),تصویب شده');
     } else if (entity === 'evaluations') {
       templateRows.push('کد پرسنلی همکار,نام همکار,دوره ارزیابی,عنوان پروفایل شغلی,وضعیت پرونده,میانگین نمره نهایی,یادداشت‌های توسعه و مربیگری');
-      templateRows.push('EMP-1001,مهندس علی رضایی,ارزیابی عملکرد تابستان ۱۴۰۳,اپراتور ارشد تراشکاری CNC,approved,4.40,دقت و انضباط فنی بسیار بالا در شیفت شب');
+      templateRows.push('EMP-1001,کارمند نمونه,ارزیابی عملکرد تابستان ۱۴۰۳,اپراتور ارشد تراشکاری CNC,approved,4.40,دقت و انضباط فنی بسیار بالا در شیفت شب');
     } else {
       handleExportFullBackupJSON();
       return;
@@ -1551,9 +1580,9 @@ export default function ManagementCenter({
 
     const demoEmployees: Employee[] = [
       { id: 'emp-demo-1', name: 'مهندس کامران صباغی', code: 'EMP-1000', unit: 'سالن ماشین‌کاری ۱', profileId: 'prof-demo-2', role: 'supervisor', username: 'kamran' },
-      { id: 'emp-demo-2', name: 'مهندس علی رضایی', code: 'EMP-1001', unit: 'سالن ماشین‌کاری ۱', profileId: 'prof-demo-1', role: 'employee', username: 'ali_rezaei', supervisorId: 'emp-demo-1' },
+      { id: 'emp-demo-2', name: 'کارمند نمونه', code: 'EMP-1001', unit: 'سالن ماشین‌کاری ۱', profileId: 'prof-demo-1', role: 'employee', username: 'emp_demo', supervisorId: 'emp-demo-1' },
       { id: 'emp-demo-3', name: 'مهندس سارا عباسی', code: 'EMP-1002', unit: 'واحد کنترل کیفیت QC', profileId: 'prof-demo-3', role: 'employee', username: 'sara_abbasi', supervisorId: 'emp-demo-1' },
-      { id: 'emp-demo-4', name: 'مهندس رضا کریمی', code: 'EMP-1003', unit: 'سالن ماشین‌کاری ۱', profileId: 'prof-demo-1', role: 'employee', username: 'reza_karimi', supervisorId: 'emp-demo-1' },
+      { id: 'emp-demo-4', name: 'کارمند تستی', code: 'EMP-1003', unit: 'سالن ماشین‌کاری ۱', profileId: 'prof-demo-1', role: 'employee', username: 'emp_test', supervisorId: 'emp-demo-1' },
       { id: 'emp-demo-5', name: 'مهندس نیلوفر شفیعی', code: 'EMP-1004', unit: 'واحد کنترل کیفیت QC', profileId: 'prof-demo-3', role: 'employee', username: 'shafiei', supervisorId: 'emp-demo-1' }
     ];
 
@@ -2246,7 +2275,42 @@ export default function ManagementCenter({
       )}
 
       {/* User Delete Confirmation Modal for Management Center */}
-      {userToDelete && (
+      
+      {/* Bulk Delete Emps Confirmation Modal */}
+      {isBulkDeleteEmpModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 text-right" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">حذف گروهی پرسنل ({selectedEmpIds.size} نفر)</h3>
+                <p className="text-[11px] text-slate-400">اطلاعات این پرسنل از سیستم حذف خواهد شد.</p>
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteEmpModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDeleteEmps}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف گروهی</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+{userToDelete && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 text-right">
           <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in">
             <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
@@ -3436,7 +3500,7 @@ export default function ManagementCenter({
                     rows={7}
                     value={rawImportText}
                     onChange={(e) => setRawImportText(e.target.value)}
-                    placeholder={`متن فایل CSV یا کدهای JSON را اینجا جای‌گذاری کنید یا فایل را آپلود نمایید...\nنمونه پرسنل: نام و نام خانوادگی,کد پرسنلی,واحد سازمانی,عنوان رده شغلی,نقش کاربری,نام کاربری\nعلی رضایی,EMP-1001,ماشین‌کاری ۱,اپراتور CNC,کارمند,ali_rezaei`}
+                    placeholder={`متن فایل CSV یا کدهای JSON را اینجا جای‌گذاری کنید یا فایل را آپلود نمایید...\nنمونه پرسنل: نام و نام خانوادگی,کد پرسنلی,واحد سازمانی,عنوان رده شغلی,نقش کاربری,نام کاربری\nکارمند نمونه,EMP-1001,ماشین‌کاری ۱,اپراتور CNC,کارمند,emp_demo`}
                     className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-xs text-slate-200 font-mono focus:outline-none focus:border-teal-500 leading-relaxed"
                   />
                 </div>

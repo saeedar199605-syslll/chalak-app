@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { calculateFinalScore } from '../utils/formulaEngine';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
 import { 
@@ -89,16 +90,7 @@ export default function Reports({
     setIsBulkDeleteModalOpen(false);
   };
 
-  const calculateScore = (ev: Evaluation) => {
-    const scoredItems = ev.scores.filter(s => s.value > 0);
-    if (!scoredItems.length) return 0;
-    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
-    if (totalWeight === 0) return 0;
-    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
-    const avg5 = weightedSum / totalWeight;
-    return Math.round(avg5 * 20 * 10) / 10;
-  };
-
+  
   // 1. Average score per department/unit
   const unitScores: Record<string, number[]> = {};
   ratedEvals.forEach(ev => {
@@ -106,7 +98,7 @@ export default function Reports({
     if (!emp) return;
     const unitName = emp.unit || 'عمومی/نامشخص';
     if (!unitScores[unitName]) unitScores[unitName] = [];
-    unitScores[unitName].push(calculateScore(ev));
+    unitScores[unitName].push(calculateFinalScore(ev, profiles));
   });
 
   const unitAverages = Object.keys(unitScores).map(unit => {
@@ -244,7 +236,7 @@ export default function Reports({
     const exportRows = evaluations.map(ev => {
       const emp = employees.find(e => e.id === ev.empId);
       const prof = profiles.find(p => p.id === ev.profileId);
-      const score = calculateScore(ev);
+      const score = calculateFinalScore(ev, profiles);
       // Determine unit and supervisor based on emp data or defaults
       const unit = emp ? emp.unit : 'نامشخص';
       const superName = emp?.supervisorId ? employees.find(e => e.id === emp.supervisorId)?.name : 'نامشخص';
@@ -287,7 +279,7 @@ export default function Reports({
     const rows = ratedEvals.map(ev => {
       const emp = employees.find(e => e.id === ev.empId);
       const prof = profiles.find(p => p.id === ev.profileId);
-      const score = calculateScore(ev);
+      const score = calculateFinalScore(ev, profiles);
       const gr = getGrade(score);
       const grDetails = GRADE_DETAILS[gr];
       
@@ -336,7 +328,7 @@ export default function Reports({
           </button>
 
           <button
-            onClick={handleExportCSV}
+            onClick={handleExportAggregatedExcel}
             className="bg-teal-500 hover:bg-teal-600 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-teal-500/10 cursor-pointer"
           >
             <Download className="w-4 h-4" />
@@ -569,7 +561,7 @@ export default function Reports({
                 {ratedEvals.map((ev) => {
                   const emp = employees.find(e => e.id === ev.empId);
                   const prof = profiles.find(p => p.id === ev.profileId);
-                  const score = calculateScore(ev);
+                  const score = calculateFinalScore(ev, profiles);
                   const gr = getGrade(score);
                   const grConf = GRADE_DETAILS[gr];
 
@@ -714,7 +706,7 @@ export default function Reports({
               {Array.from(selectedReportEvalIds).map(id => {
                 const ev = evaluations.find(e => e.id === id);
                 const emp = employees.find(e => e.id === ev?.empId);
-                const sc = ev ? calculateScore(ev) : 0;
+                const sc = ev ? calculateFinalScore(ev, profiles) : 0;
                 return (
                   <div key={id} className="flex justify-between items-center py-1 border-b border-slate-900 text-slate-200 text-xs">
                     <span>{emp?.name || 'همکار'} ({ev?.period})</span>

@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { calculateFinalScore } from '../utils/formulaEngine';
 import { 
   FileSpreadsheet, 
   Briefcase, 
@@ -182,24 +183,13 @@ export default function Dashboard({
   const draftEvals = evaluations.filter(e => e.status === 'draft');
 
   // Calculate overall performance score for locked/calibrated evals (or scored evals if none locked yet)
-  const calculateScore = (ev: Evaluation) => {
-    const scoredItems = (ev.scores || []).filter(s => (s.value || 0) > 0);
-    if (!scoredItems.length) return 0;
-    const totalWeight = scoredItems.reduce((acc, curr) => acc + (curr.weight || 1), 0);
-    if (totalWeight === 0) return 0;
-    const weightedSum = scoredItems.reduce((acc, curr) => acc + ((curr.value || 0) * (curr.weight || 1)), 0);
-    const avg = weightedSum / totalWeight;
-    // Support both 1-5 scale and 0-100 percentage scale seamlessly
-    const score100 = avg > 5 ? Math.min(100, avg) : Math.min(100, avg * 20);
-    return Math.round(score100 * 10) / 10;
-  };
-
-  const scoredEvals = evaluations.filter(e => calculateScore(e) > 0);
+  
+  const scoredEvals = evaluations.filter(e => calculateFinalScore(e) > 0);
   const finalEvals = evaluations.filter(e => e.status === 'locked' || e.status === 'calibrated');
   const statsEvals = finalEvals.length > 0 ? finalEvals : scoredEvals;
 
   const avgPerformance = statsEvals.length
-    ? Math.round(statsEvals.reduce((sum, e) => sum + calculateScore(e), 0) / statsEvals.length * 10) / 10
+    ? Math.round(statsEvals.reduce((sum, e) => sum + calculateFinalScore(e), 0) / statsEvals.length * 10) / 10
     : 0;
 
   const [radarEmpId, setRadarEmpId] = useState<string>('all');
@@ -262,7 +252,7 @@ export default function Dashboard({
   // Grade Distribution
   const distribution = { A: 0, B: 0, C: 0, D: 0, E: 0 };
   statsEvals.forEach(ev => {
-    const score = calculateScore(ev);
+    const score = calculateFinalScore(ev, profiles);
     if (score > 0) {
       const grade = getGrade(score);
       distribution[grade]++;
@@ -632,7 +622,7 @@ export default function Dashboard({
                     {evaluations.slice(-5).reverse().map((ev) => {
                       const emp = employees.find(e => e.id === ev.empId);
                       const prof = profiles.find(p => p.id === ev.profileId);
-                      const finalScore = calculateScore(ev);
+                      const finalScore = calculateFinalScore(ev, profiles);
                       const grade = finalScore > 0 ? getGrade(finalScore) : null;
                       const gradeConfig = grade ? GRADE_DETAILS[grade] : null;
 

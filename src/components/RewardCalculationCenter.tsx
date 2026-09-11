@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { calculateFinalScore } from '../utils/formulaEngine';
 import { 
   Calculator, 
   Download, 
@@ -63,8 +64,11 @@ export default function RewardCalculationCenter({
   const [isSaving, setIsSaving] = useState(false);
   const [config, setConfig] = useState<RewardConfig>(DEFAULT_CONFIG);
   const [saveIndicator, setSaveIndicator] = useState(false);
-  const [activeTab, setActiveTab] = useState<'preview' | 'settings'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'settings' | 'history'>('preview');
+  const [batchHistory, setBatchHistory] = useState<any[]>([]);
+  useEffect(() => { setBatchHistory(db.getMiscData('pe_reward_batch_history', [])); }, []);
   const [selectedPeriod, setSelectedPeriod] = useState<string>('all');
+  const [manualOverrides, setManualOverrides] = useState<Record<string, number>>({});
 
   const isDark = theme === 'dark';
 
@@ -112,17 +116,7 @@ export default function RewardCalculationCenter({
     setTimeout(() => setIsSaving(false), 500);
   };
 
-  const calculateScore = (ev: Evaluation) => {
-    if (!ev || !ev.scores || !Array.isArray(ev.scores)) return 0;
-    const scoredItems = ev.scores.filter(s => s.value > 0);
-    if (!scoredItems.length) return 0;
-    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
-    if (totalWeight === 0) return 0;
-    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
-    const avg5 = weightedSum / totalWeight;
-    return Math.round(avg5 * 20 * 10) / 10;
-  };
-
+  
   const getMultiplier = (score: number) => {
     const m = config.multipliers.find(m => score >= m.minScore && score <= (m.maxScore === 100 ? 100 : m.maxScore));
     return m ? m.multiplier : 0;
@@ -143,7 +137,7 @@ export default function RewardCalculationCenter({
       const prof = profiles.find(p => p.id === ev.profileId);
       const jobFamily = prof ? prof.family : (emp ? emp.unit : 'نامشخص');
       
-      const score = calculateScore(ev);
+      const score = calculateFinalScore(ev, profiles);
       const baseAmount = getBaseAmount(jobFamily, prof?.baseRewardAmount);
       const multiplier = getMultiplier(score);
       const finalReward = evaluateFormula(config.formula || 'baseAmount * multiplier', { baseAmount, multiplier, score });
@@ -289,10 +283,85 @@ export default function RewardCalculationCenter({
           >
             <Database className="w-4 h-4" /> خروجی Batch (DB)
           </button>
-        </div>
-        </div>
-      </div>
+  
+        {activeTab === 'history' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-black text-slate-100 flex items-center gap-2">
+                <History className="w-6 h-6 text-emerald-400" />
+                تاریخچه خروجی‌های پاداش
+              </h2>
+              <button 
+                onClick={() => {
+                  if(confirm('آیا از حذف تمام تاریخچه اطمینان دارید؟')) {
+                    db.saveMiscData('pe_reward_batch_history', []);
+                    setBatchHistory([]);
+                  }
+                }}
+                className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 cursor-pointer transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                پاکسازی کل تاریخچه
+              </button>
+            </div>
+            
+            {batchHistory.length === 0 ? (
+              <div className="text-center py-10 bg-slate-900/50 rounded-2xl border border-slate-800">
+                <p className="text-slate-400">هیچ تاریخچه‌ای یافت نشد.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {batchHistory.map((batch: any, index: number) => (
+                  <div key={batch.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 w-1 h-full bg-indigo-500" />
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="font-bold text-slate-200">کد پردازش: {batch.id}</h4>
+                        <p className="text-xs text-slate-400 mt-1">دوره: <span className="text-indigo-400">{batch.period}</span></p>
+                      </div>
+                      <button
+                        
+                        onClick={() => {
+                          if (!confirm('آیا از حذف این تاریخچه و پاکسازی مبلغ پاداش پرسنل مربوطه اطمینان دارید؟')) return;
+                          // Clear finalReward for all records in this batch
+                          if (onBulkUpdateEvaluations) {
+                             const evalsToUpdate = batch.records.map((r: any) => {
+                               const ev = evaluations.find(e => e.empId === r.empId && e.period === r.period);
+                               if (ev) return { ...ev, finalReward: undefined };
+                               return null;
+                             }).filter(Boolean);
+                             if(evalsToUpdate.length > 0) onBulkUpdateEvaluations(evalsToUpdate);
+                          }
+                          const updated = batchHistory.filter(b => b.id !== batch.id);
+                          db.saveMiscData('pe_reward_batch_history', updated);
+                          setBatchHistory(updated);
+                        }}
 
+                        className="text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
+                        title="حذف این رکورد"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    
+                    <div className="pt-3 border-t border-slate-800/80 flex justify-between items-center text-sm">
+                      <span className="text-slate-400">تاریخ: {new Date(batch.date).toLocaleString('fa-IR')}</span>
+                      <span className="text-emerald-400 font-bold font-mono">{new Intl.NumberFormat('fa-IR').format(batch.totalBudget)} ریال</span>
+                    </div>
+                    
+                    <div className="text-xs text-slate-500">
+                      تعداد کارمندان در خروجی: {batch.records?.length || 0} نفر
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+      </div>
+    </div>
+  </div>
       {/* Tabs */}
       <div className="shrink-0 px-4 pt-4 border-b border-slate-800/60 flex items-center gap-6">
         <button
@@ -391,9 +460,16 @@ export default function RewardCalculationCenter({
                               {d.multiplier}x
                             </span>
                           </td>
+                          
                           <td className="px-4 py-3 text-left font-black text-teal-400 font-mono text-base">
-                            {new Intl.NumberFormat('fa-IR').format(d.finalReward)}
+                            <input 
+                              type="number" 
+                              value={d.finalReward}
+                              onChange={(e) => setManualOverrides({ ...manualOverrides, [`${d.empId}_${d.period}`]: Number(e.target.value) })}
+                              className="bg-slate-900 border border-slate-700 text-teal-400 font-mono text-left px-2 py-1 rounded w-32 focus:border-teal-500 outline-none"
+                            />
                           </td>
+
                         </tr>
                       ))}
                     </tbody>

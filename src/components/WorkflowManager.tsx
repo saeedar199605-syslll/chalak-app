@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { calculateFinalScore } from '../utils/formulaEngine';
 import { createPortal } from 'react-dom';
 import {
   GitFork,
@@ -282,16 +283,7 @@ export default function WorkflowManager({
   }, [employees]);
 
   // Score Calculator Helper
-  const calculateScore = (ev: Evaluation) => {
-    const scoredItems = ev.scores.filter(s => s.value > 0);
-    if (!scoredItems.length) return 0;
-    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
-    if (totalWeight === 0) return 0;
-    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
-    const avg5 = weightedSum / totalWeight;
-    return Math.round(avg5 * 20 * 10) / 10;
-  };
-
+  
   // Helper to dynamically resolve EXACT current assignee for any evaluation
   const resolveCurrentAssignee = (ev: Evaluation, emp: Employee | undefined): {
     id: string;
@@ -440,7 +432,7 @@ export default function WorkflowManager({
       }
 
       const assignee = resolveCurrentAssignee({ ...ev, stage }, emp);
-      const score = calculateScore(ev);
+      const score = calculateFinalScore(ev, profiles);
       const potential = ev.potentialScore || 3.5;
 
       // 9-Box classification
@@ -1244,7 +1236,7 @@ export default function WorkflowManager({
                 const emp = employees.find(e => e.id === ev.empId);
                 const prof = profiles.find(p => p.id === ev.profileId);
                 const stageInfo = WORKFLOW_STAGES[ev.stage];
-                const score = calculateScore(ev);
+                const score = calculateFinalScore(ev, profiles);
                 const grade = getGrade(score);
                 const sla = calculateSlaDays(ev);
 
@@ -1569,7 +1561,7 @@ export default function WorkflowManager({
                     const prof = profiles.find(p => p.id === ev.profileId);
                     const supervisor = employees.find(e => e.id === emp?.supervisorId);
                     const stageInfo = WORKFLOW_STAGES[ev.stage];
-                    const score = calculateScore(ev);
+                    const score = calculateFinalScore(ev, profiles);
                     const grade = getGrade(score);
                     const sla = calculateSlaDays(ev);
 
@@ -1801,7 +1793,7 @@ export default function WorkflowManager({
                           return (
                             <div key={ev.id} className="p-1.5 bg-slate-950/70 rounded-xl flex items-center justify-between text-[11px]">
                               <span className="font-bold text-slate-200">{emp?.name}</span>
-                              <span className="font-mono text-teal-400">{calculateScore(ev)} نمره</span>
+                              <span className="font-mono text-teal-400">{calculateFinalScore(ev, profiles)} نمره</span>
                             </div>
                           );
                         })}
@@ -1843,7 +1835,7 @@ export default function WorkflowManager({
                           return (
                             <div key={ev.id} className="p-1.5 bg-slate-950/70 rounded-xl flex items-center justify-between text-[11px]">
                               <span className="font-bold text-slate-200">{emp?.name}</span>
-                              <span className="font-mono text-teal-400">{calculateScore(ev)} نمره</span>
+                              <span className="font-mono text-teal-400">{calculateFinalScore(ev, profiles)} نمره</span>
                             </div>
                           );
                         })}
@@ -1885,7 +1877,7 @@ export default function WorkflowManager({
                           return (
                             <div key={ev.id} className="p-1.5 bg-slate-950/70 rounded-xl flex items-center justify-between text-[11px]">
                               <span className="font-bold text-slate-200">{emp?.name}</span>
-                              <span className="font-mono text-teal-400">{calculateScore(ev)} نمره</span>
+                              <span className="font-mono text-teal-400">{calculateFinalScore(ev, profiles)} نمره</span>
                             </div>
                           );
                         })}
@@ -1925,7 +1917,7 @@ export default function WorkflowManager({
                 const emp = employees.find(e => e.id === ev.empId);
                 const prof = profiles.find(p => p.id === ev.profileId);
                 const idpCount = (ev.idpItems || []).length;
-                const score = calculateScore(ev);
+                const score = calculateFinalScore(ev, profiles);
 
                 return (
                   <div key={ev.id} className="bg-slate-950 border border-slate-800 rounded-3xl p-5 flex flex-col justify-between">

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { calculateFinalScore } from '../utils/formulaEngine';
 import { 
   ShieldCheck, 
   Sparkles, 
@@ -58,18 +59,8 @@ export default function MyEvaluation({
     return () => window.removeEventListener('pe_reward_config_updated', fetchConfig);
   }, []);
 
-  const calculateScore = (ev: Evaluation) => {
-    if (!ev || !ev.scores || !Array.isArray(ev.scores)) return 0;
-    const scoredItems = ev.scores.filter(s => s.value > 0);
-    if (!scoredItems.length) return 0;
-    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
-    if (totalWeight === 0) return 0;
-    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
-    const avg5 = weightedSum / totalWeight;
-    return Math.round(avg5 * 20 * 10) / 10;
-  };
-
-  const currentScore = userEval ? calculateScore(userEval) : 0;
+  
+  const currentScore = userEval ? calculateFinalScore(userEval) : 0;
   
   
   const evaluateFormula = (formula: string, variables: Record<string, number>) => {

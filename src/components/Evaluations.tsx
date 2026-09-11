@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { calculateFinalScore } from '../utils/formulaEngine';
 import { createPortal } from 'react-dom';
 import { 
   ClipboardCheck, 
@@ -36,6 +37,7 @@ import {
 } from 'lucide-react';
 import ExcelIntegrationCenter from './ExcelIntegrationCenter';
 import AIFeedbackAssistant from './AIFeedbackAssistant';
+import * as XLSX from 'xlsx';
 import { calculateKpiScore, calculateMultiSourceCompositeScore } from '../utils/formulaEngine';
 import { 
   Evaluation, 
@@ -193,6 +195,32 @@ export default function Evaluations({
   // Quick KPI Data Calculator modal for individual criteria inside evaluation
   const [quickCalcState, setQuickCalcState] = useState<{ scoreIndex: number; criterion: Criterion } | null>(null);
   const [quickCalcInputs, setQuickCalcInputs] = useState<Record<string, number>>({});
+
+  const handleExportToExcel = () => {
+    if (evaluations.length === 0) {
+      alert('هیچ ارزیابی برای خروجی وجود ندارد.');
+      return;
+    }
+    const exportRows = evaluations.map(ev => {
+      const emp = employees.find(e => e.id === ev.empId);
+      const prof = profiles.find(p => p.id === ev.profileId);
+      const score = calculateFinalScore(ev, profiles);
+      return {
+        'کد پرسنلی': emp?.code || '---',
+        'نام و نام خانوادگی': emp?.name || '---',
+        'سمت شغلی': prof?.title || '---',
+        'دوره ارزیابی': ev.period,
+        'وضعیت پرونده': ev.status === 'locked' ? 'نهایی و بسته شده' : ev.status === 'calibrated' ? 'کالیبره شده' : 'پیش‌نویس / در جریان',
+        'نمره نهایی عملکرد (۱ تا ۱۰۰)': score,
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'ارزیابی‌ها');
+    XLSX.writeFile(workbook, `Evaluations_Export_${Date.now()}.xlsx`);
+  };
+
 
   // Active evaluation form states
   const activeEval = evaluations.find(e => e.id === activeEvalId);
@@ -455,17 +483,8 @@ export default function Evaluations({
   };
 
   // Calculations for current evaluation
-  const calculateScore = (ev: Evaluation) => {
-    const scoredItems = ev.scores.filter(s => s.value > 0);
-    if (!scoredItems.length) return 0;
-    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
-    if (totalWeight === 0) return 0;
-    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
-    const avg5 = weightedSum / totalWeight;
-    return Math.round(avg5 * SCALE_FACTOR * 10) / 10; // scaled to 100
-  };
-
-  const finalScore = activeEval ? calculateScore(activeEval) : 0;
+  
+  const finalScore = activeEval ? calculateFinalScore(activeEval, profiles) : 0;
 
   const [rewardConfig, setRewardConfig] = React.useState<RewardConfig | null>(null);
   React.useEffect(() => {
@@ -561,9 +580,19 @@ export default function Evaluations({
               </p>
             </div>
             <div className="flex items-center gap-2.5 flex-wrap">
+              
+              <button
+                type="button"
+                onClick={handleExportToExcel}
+                className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 border border-indigo-500/30 transition-all cursor-pointer shadow-sm"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-indigo-400" />
+                <span>خروجی اکسل نمرات</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setIsExcelModalOpen(true)}
+
                 className="bg-slate-800 hover:bg-slate-750 text-teal-300 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 border border-slate-700 hover:border-teal-500/40 transition-all cursor-pointer shadow-md"
               >
                 <FileSpreadsheet className="w-4 h-4 text-teal-400" />
@@ -670,7 +699,7 @@ export default function Evaluations({
               renderRow={(ev) => {
                 const emp = employees.find(e => e.id === ev.empId);
                 const prof = profiles.find(p => p.id === ev.profileId);
-                const scoreVal = calculateScore(ev);
+                const scoreVal = calculateFinalScore(ev, profiles);
                 const evGrade = scoreVal > 0 ? getGrade(scoreVal) : null;
                 const gradeDetails = evGrade ? GRADE_DETAILS[evGrade] : null;
 
@@ -1193,6 +1222,19 @@ export default function Evaluations({
                 ذخیره به عنوان پیش‌نویس
               </button>
 
+              
+              {activeEval.status === 'locked' && isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => onUpdateEvaluation(activeEval.id, { ...activeEval, status: 'draft' })}
+                  className="px-4 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                  title="بازکردن قفل فرم ارزیابی (فقط ادمین)"
+                >
+                  <Unlock className="w-4 h-4" />
+                  <span>بازکردن قفل</span>
+                </button>
+              )}
+
               {activeEval.status !== 'locked' ? (
                 <button
                   type="button"
@@ -1668,7 +1710,7 @@ export default function Evaluations({
               {Array.from(selectedEvalIds).map(id => {
                 const ev = evaluations.find(e => e.id === id);
                 const emp = employees.find(e => e.id === ev?.empId);
-                const sc = ev ? calculateScore(ev) : 0;
+                const sc = ev ? calculateFinalScore(ev, profiles) : 0;
                 return (
                   <div key={id} className="flex justify-between items-center py-1 border-b border-slate-900 text-slate-200 text-xs">
                     <span>{emp?.name || 'همکار'} ({ev?.period})</span>

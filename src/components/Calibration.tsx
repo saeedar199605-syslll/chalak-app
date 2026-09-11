@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { calculateFinalScore } from '../utils/formulaEngine';
 import { 
   Scale, 
   Users, 
@@ -44,20 +45,11 @@ export default function Calibration({
   const calibratedCount = evaluations.filter(ev => ev.status === 'calibrated').length;
   const lockedCount = evaluations.filter(ev => ev.status === 'locked').length;
 
-  const calculateScore = (ev: Evaluation) => {
-    const scoredItems = ev.scores.filter(s => s.value > 0);
-    if (!scoredItems.length) return 0;
-    const totalWeight = scoredItems.reduce((acc, curr) => acc + curr.weight, 0);
-    if (totalWeight === 0) return 0;
-    const weightedSum = scoredItems.reduce((acc, curr) => acc + (curr.value * curr.weight), 0);
-    const avg5 = weightedSum / totalWeight;
-    return Math.round(avg5 * 20 * 10) / 10;
-  };
-
+  
   // Grade Distribution
   const dist = { A: 0, B: 0, C: 0, D: 0, E: 0 };
   scoredEvals.forEach(ev => {
-    const score = calculateScore(ev);
+    const score = calculateFinalScore(ev, profiles);
     dist[getGrade(score)]++;
   });
 
@@ -189,7 +181,7 @@ export default function Calibration({
                 {readyForCalibration.map((ev) => {
                   const emp = employees.find(e => e.id === ev.empId);
                   const prof = profiles.find(p => p.id === ev.profileId);
-                  const score = calculateScore(ev);
+                  const score = calculateFinalScore(ev, profiles);
                   const gr = getGrade(score);
                   const grConf = GRADE_DETAILS[gr];
 

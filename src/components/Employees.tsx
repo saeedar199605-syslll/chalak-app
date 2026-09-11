@@ -53,7 +53,7 @@ const PRESET_ROSTERS = [
     unit: 'سالن ماشین‌کاری ۱',
     description: 'شامل ۳ اپراتور ارشد تراشکاری، فرزکاری و ستاپ دستگاه‌های چندمحوره',
     members: [
-      { code: 'EMP-1006', name: 'مهندس سعید میرزایی', unit: 'سالن ماشین‌کاری ۱', role: 'employee' as UserRole, username: 'saeed' },
+      { code: 'EMP-1006', name: 'کارمند نمونه', unit: 'سالن ماشین‌کاری ۱', role: 'employee' as UserRole, username: 'saeed' },
       { code: 'EMP-1007', name: 'جناب آقای مجید نوری', unit: 'سالن ماشین‌کاری ۱', role: 'employee' as UserRole, username: 'majid' },
       { code: 'EMP-1008', name: 'مهندس کامران صباغی', unit: 'سالن ماشین‌کاری ۱', role: 'supervisor' as UserRole, username: 'kamran' }
     ]
@@ -248,7 +248,7 @@ export default function Employees({
     ],
     templateSampleRows: [
       {
-        'نام و نام خانوادگی': 'مهندس علی رضایی',
+        'نام و نام خانوادگی': 'کارمند نمونه',
         'کد پرسنلی': 'EMP-1001',
         'واحد سازمانی': 'سالن ماشین‌کاری ۱',
         'عنوان رده شغلی': 'اپراتور ارشد تراشکاری CNC',
@@ -1244,7 +1244,7 @@ export default function Employees({
                   <input
                     type="text"
                     required
-                    placeholder="مثال: رضا صادقی"
+                    placeholder="مثال: کارمند نمونه"
                     value={formName}
                     onChange={(e) => setFormName(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-slate-200 focus:outline-none focus:border-teal-500"

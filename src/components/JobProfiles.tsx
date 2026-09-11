@@ -368,6 +368,16 @@ export default function JobProfiles({
           </p>
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
+          
+          {selectedProfileIds.size > 0 && (
+            <button
+              onClick={() => setIsBulkDeleteModalOpen(true)}
+              className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 border border-rose-500/20 transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>حذف گروهی ({selectedProfileIds.size})</span>
+            </button>
+          )}
           <button
             onClick={() => {
               setEditingId(null);
@@ -389,15 +399,25 @@ export default function JobProfiles({
       {/* Profiles Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {profiles.map(p => (
-          <div key={p.id} className="p-4 rounded-xl border bg-slate-900 border-slate-800 flex flex-col gap-3">
+
+          <div key={p.id} className={`p-4 rounded-xl border flex flex-col gap-3 transition-colors ${selectedProfileIds.has(p.id) ? 'bg-indigo-900/20 border-indigo-500/50' : 'bg-slate-900 border-slate-800'}`}>
              <div className="flex justify-between items-start">
-               <div>
+               <div className="flex items-start gap-3">
+                 <input
+                   type="checkbox"
+                   checked={selectedProfileIds.has(p.id)}
+                   onChange={(e) => handleToggleSelectProfile(p.id, e as any)}
+                   className="mt-1 w-4 h-4 rounded border-slate-700 bg-slate-800 text-indigo-500 focus:ring-indigo-500/30 focus:ring-offset-0 cursor-pointer"
+                 />
+                 <div>
+
                  <h3 className="font-bold text-slate-200">{p.title}</h3>
                  <div className="text-xs text-slate-400 mt-1 space-y-1">
                    <p>کد: <span className="font-mono text-teal-400">{p.code}</span></p>
                    <p>خانواده شغلی: {p.family}</p>
                    {p.baseRewardAmount ? <p className="text-emerald-400">ضریب پایه: {new Intl.NumberFormat('fa-IR').format(p.baseRewardAmount)} ریال</p> : null}
                  </div>
+               </div>
                </div>
                <div className="flex gap-2">
                  <button onClick={() => {
