@@ -1,16 +1,22 @@
 const fs = require('fs');
 let code = fs.readFileSync('src/components/Sidebar.tsx', 'utf-8');
 
-code = code.replace(
-/import \{/g,
-"import { LifeBuoy, "
-);
+if (!code.includes('Calculator')) {
+  code = code.replace(
+    /import \{([^{}]+)\} from 'lucide-react';/,
+    (match, p1) => {
+      return "import {" + p1 + ", Calculator } from 'lucide-react';";
+    }
+  );
+}
 
-// Add support tab to NavLink rendering
-code = code.replace(
-/<nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 scrollbar-hide">/,
-`<nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 scrollbar-hide">
-        <NavLink id="support" icon={LifeBuoy} label={currentUser?.role === 'admin' ? 'تیکت‌های پشتیبانی' : 'پشتیبانی'} />`
-);
-
-fs.writeFileSync('src/components/Sidebar.tsx', code);
+if (!code.includes("id: 'rewards'")) {
+  code = code.replace(
+    /\{ id: 'reports', label: 'تحلیل‌ها و ماتریس ۹-Box'([^}]+)\},/,
+    "{ id: 'reports', label: 'تحلیل‌ها و ماتریس ۹-Box'$1},\n        { id: 'rewards', label: 'محاسبات ریالی پاداش', icon: Calculator, roles: ['admin'] },"
+  );
+  fs.writeFileSync('src/components/Sidebar.tsx', code);
+  console.log('Sidebar.tsx patched.');
+} else {
+  console.log('Rewards tab already in Sidebar.tsx');
+}
