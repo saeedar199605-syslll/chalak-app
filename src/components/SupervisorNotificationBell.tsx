@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Bell, 
   AlertTriangle, 
@@ -43,6 +43,26 @@ export default function SupervisorNotificationBell({
   const overdueList: OverdueEvaluationItem[] = getOverdueEvaluations(evaluations, employees, currentUser);
   const overdueCount = overdueList.length;
 
+  // Items pending approval/action by current user or in supervisor/admin scope
+  const pendingApprovalsCount = useMemo(() => {
+    return evaluations.filter(ev => {
+      if (ev.stage === 'completed') return false;
+      const userRole = currentUser.role as string;
+      const evStage = (ev.stage || '') as string;
+      if (userRole === 'admin') return true;
+      if (userRole === 'hr') return evStage === 'hr_approval' || evStage === 'calibration_review';
+      if (userRole === 'manager') return evStage === 'manager_review' || evStage === 'calibration_review';
+      if (userRole === 'supervisor') {
+        const emp = employees.find(e => e.id === ev.empId);
+        return emp?.supervisorId === currentUser.id && (evStage === 'supervisor_review' || ev.currentAssigneeId === currentUser.id);
+      }
+      return ev.currentAssigneeId === currentUser.id;
+    }).length;
+  }, [evaluations, employees, currentUser]);
+
+  const totalPendingCount = Math.max(overdueCount, pendingApprovalsCount);
+  const shouldShake = overdueCount > 5 || pendingApprovalsCount > 5;
+
   // Close dropdown on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -75,14 +95,12 @@ export default function SupervisorNotificationBell({
       <button
         type="button"
         onClick={handleToggleOrNavigate}
-        title={overdueCount > 0 
-          ? `${overdueCount} پرونده ارزیابی معوقه - برای مشاهده جزئیات کلیک کنید` 
+        title={totalPendingCount > 0 
+          ? `${totalPendingCount} پرونده ارزیابی معوقه یا در انتظار اقدام - برای مشاهده جزئیات کلیک کنید` 
           : 'اعلان‌های هوشمند: همه پرونده‌ها در وضعیت استاندارد قرار دارند'
         }
         className={`relative px-3 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-2 group border ${
-          overdueCount > 5 ? 'animate-shake' : ''
-        } ${
-          overdueCount > 0
+          totalPendingCount > 0
             ? theme === 'dark'
               ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-500/30 text-rose-300 shadow-sm'
               : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700 shadow-xs'
@@ -90,29 +108,38 @@ export default function SupervisorNotificationBell({
               ? 'bg-slate-900/80 hover:bg-slate-800 border-slate-800 text-slate-400 hover:text-slate-200' 
               : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-600 hover:text-slate-800 shadow-xs'
         }`}
-        aria-label="اعلان پرونده‌های معوقه"
+        aria-label="اعلان پرونده‌های معوقه و در انتظار اقدام"
       >
         <div className="relative shrink-0">
           <Bell className={`w-4 h-4 transition-transform duration-300 ${
-            overdueCount > 0 ? 'text-rose-500 group-hover:scale-110 group-hover:rotate-12 animate-pulse' : ''
+            shouldShake 
+              ? 'text-rose-500 animate-bell-shake filter drop-shadow-[0_0_8px_rgba(244,63,94,0.6)]' 
+              : totalPendingCount > 0 
+                ? 'text-rose-500 group-hover:scale-110 group-hover:rotate-12 animate-pulse' 
+                : ''
           }`} />
           
-          {/* Animated Ping Glow Ring if Overdue */}
-          {overdueCount > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+          {/* Animated Ping Glow Ring if Overdue or Many Pending */}
+          {totalPendingCount > 0 && (
+            <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${shouldShake ? 'bg-rose-500 opacity-90' : 'bg-rose-400 opacity-75'}`}></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600 border border-white/40"></span>
             </span>
           )}
         </div>
 
-        {/* Overdue Badge with Count */}
-        {overdueCount > 0 ? (
+        {/* Overdue / Pending Badge with Count */}
+        {totalPendingCount > 0 ? (
           <div className="flex items-center gap-1.5 font-bold text-xs">
-            <span className="px-1.5 py-0.2 rounded-md bg-rose-500 text-white font-mono text-[11px]">
-              {overdueCount}
+            <span className={`px-1.5 py-0.2 rounded-md text-white font-mono text-[11px] flex items-center gap-1 ${
+              shouldShake ? 'bg-rose-600 animate-pulse ring-2 ring-rose-500/50 font-black' : 'bg-rose-500'
+            }`}>
+              {shouldShake && <Flame className="w-3 h-3 text-amber-300 animate-bounce" />}
+              {totalPendingCount}
             </span>
-            <span className="text-[11px] font-bold">معوقه</span>
+            <span className="text-[11px] font-bold">
+              {shouldShake ? 'اقدام فوری' : overdueCount > 0 ? 'معوقه' : 'در انتظار'}
+            </span>
             <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
           </div>
         ) : (

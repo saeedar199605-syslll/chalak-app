@@ -27,6 +27,7 @@ import SmartGrowthAnalytics from './SmartGrowthAnalytics';
 import RadarChartD3, { CompetencyDimensionData } from './RadarChartD3';
 import SupervisorNotificationBell from './SupervisorNotificationBell';
 import CalendarWidget from './CalendarWidget';
+import { db } from '../utils/db';
 
 interface DashboardProps {
   criteria: Criterion[];
@@ -114,10 +115,22 @@ export default function Dashboard({
     ];
   });
 
-  // Sync targets
+  // Sync targets with real-time db updates
   React.useEffect(() => {
-    localStorage.setItem('pe_workshop_targets', JSON.stringify(targets));
+    db.saveWorkshopTargets(targets);
   }, [targets]);
+
+  React.useEffect(() => {
+    const unsub = db.subscribe((key, data) => {
+      if (key === 'pe_workshop_targets' && Array.isArray(data)) {
+        setTargets(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+          return data;
+        });
+      }
+    });
+    return unsub;
+  }, []);
 
   // Target Form states
   const [newTargetEmpId, setNewTargetEmpId] = useState<string>('');

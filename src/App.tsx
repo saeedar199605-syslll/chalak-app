@@ -243,8 +243,19 @@ export default function App() {
     return () => clearTimeout(t);
   }, []);
 
-  // Multi-tab sync without infinite render loops
+  // Multi-tab and intra-app real-time synchronization
   useEffect(() => {
+    // 1. Intra-app reactive listener for instant updates across all forms
+    const unsubscribe = db.subscribe((key, data) => {
+      if (key === 'pe_criteria') setCriteria(data || db.getCriteria());
+      else if (key === 'pe_profiles') setProfiles(data || db.getProfiles());
+      else if (key === 'pe_employees') setEmployees(data || db.getEmployees());
+      else if (key === 'pe_evaluations') setEvaluations(data || db.getEvaluations());
+      else if (key === 'pe_archived_evaluations') setArchivedEvaluations(data || db.getArchivedEvaluations());
+      notifyDataSaved();
+    });
+
+    // 2. Cross-tab synchronization
     const handleStorage = (e: StorageEvent) => {
       if (e.key === 'pe_criteria') setCriteria(db.getCriteria());
       else if (e.key === 'pe_profiles') setProfiles(db.getProfiles());
@@ -253,8 +264,12 @@ export default function App() {
       else if (e.key === 'pe_archived_evaluations') setArchivedEvaluations(db.getArchivedEvaluations());
     };
     window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, []);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [notifyDataSaved]);
 
   // Check and alert pending tasks if user is logged in
   useEffect(() => {
@@ -485,12 +500,20 @@ export default function App() {
   };
 
   const handleDeleteProfile = (id: string) => {
-    const res = db.deleteProfile(id);
+    const res = db.deleteProfile(id, true);
     if (!res.success) {
-      alert(res.error || 'این پروفایل به کارمندان متصل است و قابل حذف نیست.');
+      alert(res.error || 'خطا در حذف پروفایل شغلی.');
       return;
     }
     setProfiles(db.getProfiles());
+    setEmployees(db.getEmployees());
+    notifyDataSaved();
+  };
+
+  const handleBulkDeleteProfiles = (ids: string[]) => {
+    const res = db.deleteProfilesBatch(ids);
+    setProfiles(db.getProfiles());
+    setEmployees(db.getEmployees());
     notifyDataSaved();
   };
 
@@ -531,11 +554,23 @@ export default function App() {
   const handleDeleteEmployee = (id: string) => {
     const target = employees.find(e => e.id === id);
     if (!target) return;
-    if (target.role === 'admin' || target.username === 'admin' || target.code === 'ADMIN-001') {
+    // Protect primary root admin account only
+    if (target.username === 'admin' && target.code === 'ADMIN-001') {
+      alert('حساب مدیر ارشد سیستم (ADMIN-001) محافظت‌شده بوده و قابل حذف نمی‌باشد.');
       return;
     }
     const success = db.deleteEmployee(id);
     if (success) {
+      setEmployees(db.getEmployees());
+      setEvaluations(db.getEvaluations());
+      notifyDataSaved();
+    }
+  };
+
+  const handleBulkDeleteEmployees = (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    const res = db.deleteEmployeesBatch(ids);
+    if (res.success) {
       setEmployees(db.getEmployees());
       setEvaluations(db.getEvaluations());
       notifyDataSaved();
@@ -578,10 +613,22 @@ export default function App() {
   };
 
   const handleUpdateEvaluation = (id: string, updatedEv: Evaluation) => {
-    const exists = evaluations.some(e => e.id === id);
-    const updated = exists ? evaluations.map(e => e.id === id ? updatedEv : e) : [...evaluations, updatedEv];
-    db.saveEvaluations(updated);
-    setEvaluations(updated);
+    setEvaluations(prev => {
+      const exists = prev.some(e => e.id === id);
+      const next = exists ? prev.map(e => e.id === id ? updatedEv : e) : [...prev, updatedEv];
+      db.saveEvaluations(next);
+      return next;
+    });
+    notifyDataSaved();
+  };
+
+  const handleBatchAddCriteria = (
+    newOrUpdatedList: Array<Omit<Criterion, 'id'> & { id?: string }>,
+    mode: 'merge' | 'prefix_dept' | 'skip_existing' | 'replace' = 'merge'
+  ) => {
+    const batchMode = mode === 'replace' ? 'replace' : mode === 'skip_existing' ? 'skip_existing' : 'merge';
+    db.saveCriteriaBatch(newOrUpdatedList, batchMode);
+    setCriteria(db.getCriteria());
     notifyDataSaved();
   };
 
@@ -591,6 +638,27 @@ export default function App() {
     setEvaluations(updated);
     if (activeEvalId === id) setActiveEvalId(null);
     notifyDataSaved();
+  };
+
+  const handleBulkDeleteCriteria = (ids: string[]) => {
+    const res = db.deleteCriteriaBatch(ids);
+    if (res.deletedCount > 0) {
+      setCriteria(db.getCriteria());
+      setProfiles(db.getProfiles());
+      setEvaluations(db.getEvaluations());
+      notifyDataSaved();
+    }
+  };
+
+  const handleBulkDeleteEvaluations = (ids: string[]) => {
+    const res = db.deleteEvaluationsBatch(ids);
+    if (res.deletedCount > 0) {
+      setEvaluations(db.getEvaluations());
+      if (activeEvalId && ids.includes(activeEvalId)) {
+        setActiveEvalId(null);
+      }
+      notifyDataSaved();
+    }
   };
 
   const handleStartEvaluationDirect = (empId: string) => {
@@ -723,13 +791,30 @@ export default function App() {
         <div className="p-4 sm:p-6 md:p-8">
           <div className="max-w-7xl mx-auto space-y-6">
           {currentTab === 'dashboard' && <Dashboard criteria={criteria} profiles={profiles} employees={employees} evaluations={evaluations} onNavigate={setCurrentTab} onSelectEvaluation={handleSelectEvaluation} currentUser={currentUser} hasCertifiedBadge={hasCertifiedBadge} theme={theme} />}
-          {currentTab === 'workflow' && <WorkflowManager currentUser={currentUser} evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onUpdateEvaluation={handleUpdateEvaluation} onBulkUpdateEvaluations={handleBulkUpdateEvaluations} onUpdateEmployees={handleBulkUpdateEmployees} onSelectEvaluation={handleSelectEvaluation} theme={theme} />}
+          {currentTab === 'workflow' && (
+            <WorkflowManager 
+              currentUser={currentUser} 
+              evaluations={evaluations} 
+              employees={employees} 
+              profiles={profiles} 
+              criteria={criteria} 
+              onUpdateEvaluation={handleUpdateEvaluation} 
+              onBulkUpdateEvaluations={handleBulkUpdateEvaluations} 
+              onDeleteEvaluation={handleDeleteEvaluation}
+              onBulkDeleteEvaluations={handleBulkDeleteEvaluations}
+              onUpdateEmployees={handleBulkUpdateEmployees} 
+              onSelectEvaluation={handleSelectEvaluation} 
+              theme={theme} 
+            />
+          )}
           {currentTab === 'criteria' && (
             <CriteriaBank 
               criteria={criteria} 
               onAddCriterion={handleAddCriterion} 
               onUpdateCriterion={handleUpdateCriterion} 
               onDeleteCriterion={handleDeleteCriterion} 
+              onBulkDeleteCriteria={handleBulkDeleteCriteria}
+              onBatchAddCriteria={handleBatchAddCriteria}
               employees={employees}
               profiles={profiles}
               evaluations={evaluations}
@@ -737,11 +822,36 @@ export default function App() {
               theme={theme} 
             />
           )}
-          {currentTab === 'profiles' && <JobProfiles profiles={profiles} criteria={criteria} onAddProfile={handleAddProfile} onUpdateProfile={handleUpdateProfile} onDeleteProfile={handleDeleteProfile} onToggleLockProfile={handleToggleLockProfile} onAddCriterion={handleAddCriterion} theme={theme} />}
-          {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onBulkUpdateEmployees={handleBulkUpdateEmployees} onDeleteEmployee={handleDeleteEmployee} onStartEvaluation={handleStartEvaluationDirect} theme={theme} />}
-          {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onBulkUpdateEvaluations={handleBulkUpdateEvaluations} onDeleteEvaluation={handleDeleteEvaluation} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} currentUser={currentUser} />}
+          {currentTab === 'profiles' && (
+            <JobProfiles 
+              profiles={profiles} 
+              criteria={criteria} 
+              onAddProfile={handleAddProfile} 
+              onUpdateProfile={handleUpdateProfile} 
+              onDeleteProfile={handleDeleteProfile} 
+              onBulkDeleteProfiles={handleBulkDeleteProfiles}
+              onToggleLockProfile={handleToggleLockProfile} 
+              onAddCriterion={handleAddCriterion} 
+              theme={theme} 
+              currentUser={currentUser}
+            />
+          )}
+          {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onBulkUpdateEmployees={handleBulkUpdateEmployees} onDeleteEmployee={handleDeleteEmployee} onBulkDeleteEmployees={handleBulkDeleteEmployees} onStartEvaluation={handleStartEvaluationDirect} theme={theme} />}
+          {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onBulkUpdateEvaluations={handleBulkUpdateEvaluations} onDeleteEvaluation={handleDeleteEvaluation} onBulkDeleteEvaluations={handleBulkDeleteEvaluations} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} currentUser={currentUser} />}
           {currentTab === 'calibration' && <Calibration evaluations={evaluations} employees={employees} profiles={profiles} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} />}
-          {currentTab === 'reports' && <Reports evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} />}
+          {currentTab === 'reports' && (
+            <Reports 
+              evaluations={evaluations} 
+              employees={employees} 
+              profiles={profiles} 
+              criteria={criteria} 
+              onDeleteEvaluation={handleDeleteEvaluation}
+              onBulkDeleteEvaluations={handleBulkDeleteEvaluations}
+              onSelectEvaluation={handleSelectEvaluation}
+              onNavigate={setCurrentTab}
+              currentUser={currentUser}
+            />
+          )}
           {currentTab === 'lattice-hub' && (
             <LatticePerformanceHub 
               currentUser={currentUser} 

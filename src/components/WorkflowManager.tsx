@@ -50,7 +50,8 @@ import {
   UserX,
   Calendar,
   CheckSquare,
-  Square
+  Square,
+  Trash2
 } from 'lucide-react';
 import { downloadWorkflowCalendarICS, DEFAULT_WORKFLOW_DEADLINES } from '../utils/calendarExport';
 import { db } from '../utils/db';
@@ -82,6 +83,8 @@ interface WorkflowManagerProps {
   onBulkUpdateEvaluations?: (updatedEvaluations: Evaluation[]) => void;
   onUpdateEmployees?: (updatedEmployees: Employee[]) => void;
   onSelectEvaluation?: (id: string) => void;
+  onDeleteEvaluation?: (id: string) => void;
+  onBulkDeleteEvaluations?: (ids: string[]) => void;
   theme: 'dark' | 'light';
 }
 
@@ -95,6 +98,8 @@ export default function WorkflowManager({
   onBulkUpdateEvaluations,
   onUpdateEmployees,
   onSelectEvaluation,
+  onDeleteEvaluation,
+  onBulkDeleteEvaluations,
   theme
 }: WorkflowManagerProps) {
   // Navigation Tabs:
@@ -169,6 +174,104 @@ export default function WorkflowManager({
   const displayToast = (message: string, type: 'success' | 'info' | 'warning' = 'success') => {
     setShowToast({ message, type });
     setTimeout(() => setShowToast(null), 4500);
+  };
+
+  // Deletion and Stage Redirection states
+  const [evalToDelete, setEvalToDelete] = useState<Evaluation | null>(null);
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+  const [isBulkRedirectModalOpen, setIsBulkRedirectModalOpen] = useState(false);
+  const [bulkRedirectTargetStage, setBulkRedirectTargetStage] = useState<WorkflowStageKey>('calibration_review');
+  const [bulkRedirectComment, setBulkRedirectComment] = useState('');
+
+  const handleConfirmDeleteSingle = (ev: Evaluation) => {
+    if (onDeleteEvaluation) {
+      onDeleteEvaluation(ev.id);
+    } else {
+      const nextLocal = localEvaluations.filter(e => e.id !== ev.id);
+      setLocalEvaluations(nextLocal);
+      db.saveEvaluations(nextLocal);
+      db.syncToCloudNow();
+    }
+    displayToast('پرونده ارزیابی با موفقیت حذف گردید.', 'success');
+    setEvalToDelete(null);
+  };
+
+  const handleConfirmDeleteBulk = () => {
+    if (selectedEvalIds.length === 0) return;
+    if (onBulkDeleteEvaluations) {
+      onBulkDeleteEvaluations(selectedEvalIds);
+    } else if (onDeleteEvaluation) {
+      selectedEvalIds.forEach(id => onDeleteEvaluation(id));
+    } else {
+      const nextLocal = localEvaluations.filter(e => !selectedEvalIds.includes(e.id));
+      setLocalEvaluations(nextLocal);
+      db.saveEvaluations(nextLocal);
+      db.syncToCloudNow();
+    }
+    displayToast(`${selectedEvalIds.length} پرونده با موفقیت از سیستم حذف گردید.`, 'success');
+    setSelectedEvalIds([]);
+    setIsBulkDeleteModalOpen(false);
+  };
+
+  const handleConfirmBulkRedirect = () => {
+    if (selectedEvalIds.length === 0) return;
+    const timestamp = new Intl.DateTimeFormat('fa-IR', {
+      dateStyle: 'short',
+      timeStyle: 'medium'
+    }).format(new Date());
+
+    const updatedEvals: Evaluation[] = [];
+    const nextLocalEvaluations = localEvaluations.map(ev => {
+      if (!selectedEvalIds.includes(ev.id)) return ev;
+
+      const fromStage = ev.stage;
+      const logEntry: WorkflowTransitionLog = {
+        id: `trans-bulk-redir-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        fromStage,
+        toStage: bulkRedirectTargetStage,
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        actorRole: currentUser.role,
+        action: 'admin_override',
+        comment: bulkRedirectComment || 'هدایت گروهی به مرحله توسط مدیر سیستم',
+        timestamp
+      };
+
+      let newStatus = ev.status;
+      if (bulkRedirectTargetStage === 'completed') newStatus = 'locked';
+      else if (bulkRedirectTargetStage === 'hr_approval' || bulkRedirectTargetStage === 'calibration_review') newStatus = 'calibrated';
+      else newStatus = 'draft';
+
+      const emp = employees.find(e => e.id === ev.empId);
+      const resolvedAssignee = resolveCurrentAssignee({ ...ev, stage: bulkRedirectTargetStage }, emp);
+
+      const updated: Evaluation = {
+        ...ev,
+        stage: bulkRedirectTargetStage,
+        status: newStatus,
+        currentAssigneeId: resolvedAssignee.id,
+        currentAssigneeName: resolvedAssignee.name,
+        currentAssigneeRole: resolvedAssignee.role,
+        history: [logEntry, ...(ev.history || [])]
+      };
+      updatedEvals.push(updated);
+      return updated;
+    });
+
+    setLocalEvaluations(nextLocalEvaluations);
+    db.saveEvaluations(nextLocalEvaluations);
+    db.syncToCloudNow();
+
+    if (onBulkUpdateEvaluations && updatedEvals.length > 0) {
+      onBulkUpdateEvaluations(updatedEvals);
+    } else {
+      updatedEvals.forEach(ue => onUpdateEvaluation(ue.id, ue));
+    }
+
+    displayToast(`${selectedEvalIds.length} پرونده با موفقیت به مرحله «${WORKFLOW_STAGES[bulkRedirectTargetStage]?.label}» هدایت گردیدند.`, 'success');
+    setSelectedEvalIds([]);
+    setIsBulkRedirectModalOpen(false);
+    setBulkRedirectComment('');
   };
 
   // Unique units
@@ -1239,16 +1342,42 @@ export default function WorkflowManager({
                             setActionType('reject');
                             setActionComment('');
                           }}
-                          className="p-2 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 rounded-xl text-xs transition"
+                          className="p-2 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 rounded-xl text-xs transition cursor-pointer"
                           title="عودت پرونده جهت اصلاح"
                         >
                           <CornerDownLeft className="w-4 h-4" />
                         </button>
                       )}
 
+                      {/* Admin Override Stage & Delete in My Tasks */}
+                      {currentUser.role === 'admin' && (
+                        <>
+                          <button
+                            onClick={() => {
+                              setSelectedEvalForAction(ev);
+                              setActionType('override');
+                              setOverrideStage(ev.stage);
+                            }}
+                            className="p-2 bg-slate-800 hover:bg-purple-600 text-slate-300 hover:text-white rounded-xl text-xs transition cursor-pointer"
+                            title="تغییر مستقیم مرحله (ادمین)"
+                          >
+                            <Settings className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setEvalToDelete(ev)}
+                            className="p-2 bg-slate-800 hover:bg-rose-600 text-slate-400 hover:text-white rounded-xl text-xs transition cursor-pointer"
+                            title="حذف این پرونده ارزیابی"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
+
                       <button
                         onClick={() => setSelectedEvalForVisualModal(ev)}
-                        className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs transition"
+                        className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs transition cursor-pointer"
                         title="مشاهده جزئیات چرخه و لاگ"
                       >
                         <GitFork className="w-4 h-4" />
@@ -1325,9 +1454,9 @@ export default function WorkflowManager({
                 <div>
                   <div className="font-bold text-xs text-slate-100 flex items-center gap-1.5">
                     <span>پرونده ارزیابی انتخاب‌شده جهت اقدام گروهی</span>
-                    <span className="px-2 py-0.5 bg-teal-500/20 text-teal-300 rounded-full text-[10px] font-bold">Optimistic Live Update</span>
+                    <span className="px-2 py-0.5 bg-teal-500/20 text-teal-300 rounded-full text-[10px] font-bold">مدیریت گروهی</span>
                   </div>
-                  <div className="text-[11px] text-slate-400">تغییر وضعیت آنی و اعمال دسته‌جمعی بدون رفرش صفحه</div>
+                  <div className="text-[11px] text-slate-400">تغییر وضعیت، انتقال به مرحله دلخواه یا حذف دسته‌جمعی</div>
                 </div>
               </div>
 
@@ -1339,8 +1468,20 @@ export default function WorkflowManager({
                   className="px-3.5 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-black rounded-xl text-xs transition flex items-center gap-1.5 shadow-lg shadow-teal-500/20 cursor-pointer"
                 >
                   <ArrowLeft className="w-4 h-4" />
-                  <span>انتقال گروهی به گام بعد (Apply Grouped)</span>
+                  <span>انتقال به گام بعد</span>
                 </button>
+
+                {/* Admin Bulk Stage Redirection */}
+                {currentUser.role === 'admin' && (
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkRedirectModalOpen(true)}
+                    className="px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl text-xs transition flex items-center gap-1.5 shadow-lg shadow-purple-600/20 cursor-pointer"
+                  >
+                    <Settings className="w-4 h-4" />
+                    <span>هدایت گروهی به مرحله دلخواه</span>
+                  </button>
+                )}
 
                 {/* Apply Grouped: Move to Calibration */}
                 <button
@@ -1349,7 +1490,7 @@ export default function WorkflowManager({
                   className="px-3.5 py-2 bg-purple-600/30 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-500/40 font-bold rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
                 >
                   <Scale className="w-4 h-4" />
-                  <span>ارسال گروهی به کالیبراسیون</span>
+                  <span>ارسال به کالیبراسیون</span>
                 </button>
 
                 {/* Apply Grouped: HR Final Approval */}
@@ -1359,8 +1500,20 @@ export default function WorkflowManager({
                   className="px-3.5 py-2 bg-emerald-600/30 hover:bg-emerald-600 text-emerald-200 hover:text-white border border-emerald-500/40 font-bold rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
                 >
                   <CheckCheck className="w-4 h-4" />
-                  <span>تصویب و تایید نهایی گروهی</span>
+                  <span>تصویب نهایی</span>
                 </button>
+
+                {/* Admin Bulk Delete */}
+                {currentUser.role === 'admin' && (
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkDeleteModalOpen(true)}
+                    className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl text-xs transition flex items-center gap-1.5 shadow-lg shadow-rose-600/20 cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>حذف گروهی ({selectedEvalIds.length})</span>
+                  </button>
+                )}
 
                 {/* Deselect All */}
                 <button
@@ -1368,7 +1521,7 @@ export default function WorkflowManager({
                   onClick={() => setSelectedEvalIds([])}
                   className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 rounded-xl text-xs transition cursor-pointer"
                 >
-                  لغو انتخاب ({selectedEvalIds.length})
+                  لغو انتخاب
                 </button>
               </div>
             </div>
@@ -1556,10 +1709,19 @@ export default function WorkflowManager({
                                     setActionType('override');
                                     setOverrideStage(ev.stage);
                                   }}
-                                  className="p-1.5 bg-slate-800 hover:bg-purple-600 text-slate-300 hover:text-white rounded-lg transition"
+                                  className="p-1.5 bg-slate-800 hover:bg-purple-600 text-slate-300 hover:text-white rounded-lg transition cursor-pointer"
                                   title="تغییر مستقیم مرحله (ادمین)"
                                 >
                                   <Settings className="w-3.5 h-3.5" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setEvalToDelete(ev)}
+                                  className="p-1.5 bg-slate-800 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
+                                  title="حذف این پرونده ارزیابی"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               </>
                             )}
@@ -2464,6 +2626,195 @@ export default function WorkflowManager({
                 className="px-5 py-2 bg-orange-500 hover:bg-orange-400 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer"
               >
                 {currentUser.role === 'admin' ? 'ثبت و ابلاغ رای کمیته' : 'ارسال به کمیته تجدیدنظر'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 5: DELETE SINGLE EVALUATION CONFIRMATION */}
+      {/* ========================================================================= */}
+      {evalToDelete && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fade-in" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 w-full max-w-md rounded-3xl shadow-2xl p-6 text-slate-100 space-y-4 text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف پرونده از گردش کار</h3>
+                <p className="text-[11px] text-slate-400">این عملیات بلافاصله انجام شده و غیرقابل بازگشت است</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>همکار:</span>
+                <span className="font-bold text-slate-100">
+                  {employees.find(e => e.id === evalToDelete.empId)?.name || 'نامشخص'}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>مرحله فعلی:</span>
+                <span className="text-teal-400 font-bold">{WORKFLOW_STAGES[evalToDelete.stage]?.label}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>دوره:</span>
+                <span className="font-mono text-slate-300">{evalToDelete.period}</span>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                هشدار: با حذف این پرونده، تمامی امتیازات، سوابق اقدامات و لاگ گردش کار این دوره پاک خواهد شد.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setEvalToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConfirmDeleteSingle(evalToDelete)}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>بله، حذف پرونده</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 6: BULK DELETE EVALUATIONS CONFIRMATION */}
+      {/* ========================================================================= */}
+      {isBulkDeleteModalOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fade-in" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 w-full max-w-md rounded-3xl shadow-2xl p-6 text-slate-100 space-y-4 text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف گروهی پرونده‌های گردش کار</h3>
+                <p className="text-[11px] text-slate-400">حذف همزمان {selectedEvalIds.length} پرونده انتخاب‌شده</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs max-h-48 overflow-y-auto">
+              <div className="text-slate-400 font-medium mb-1">پرونده‌های انتخاب‌شده:</div>
+              {selectedEvalIds.map(id => {
+                const ev = localEvaluations.find(e => e.id === id);
+                const emp = employees.find(e => e.id === ev?.empId);
+                return (
+                  <div key={id} className="flex justify-between items-center py-1 border-b border-slate-900 text-slate-200 text-xs">
+                    <span>{emp?.name || 'همکار'}</span>
+                    <span className="text-[10px] text-teal-400">{WORKFLOW_STAGES[ev?.stage || 'self_review']?.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                توجه: این اقدام تمامی پرونده‌های انتخاب‌شده را از دیتابیس پاک کرده و غیرقابل بازیابی است.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteBulk}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف گروهی ({selectedEvalIds.length} مورد)</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 7: BULK STAGE REDIRECT MODAL (ادمین - هدایت گروهی به مرحله دلخواه) */}
+      {/* ========================================================================= */}
+      {isBulkRedirectModalOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fade-in" dir="rtl">
+          <div className="bg-slate-900 border border-purple-500/40 w-full max-w-md rounded-3xl shadow-2xl p-6 text-slate-100 space-y-4 text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                <Settings className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">هدایت گروهی پرونده‌ها به مرحله خاص</h3>
+                <p className="text-[11px] text-slate-400">انتقال همزمان {selectedEvalIds.length} پرونده انتخاب‌شده توسط مدیر سیستم</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">مرحله هدف جهت انتقال:</label>
+                <select
+                  value={bulkRedirectTargetStage}
+                  onChange={e => setBulkRedirectTargetStage(e.target.value as WorkflowStageKey)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500"
+                >
+                  {Object.entries(WORKFLOW_STAGES).map(([k, v]) => (
+                    <option key={k} value={k}>{v.label} ({v.responsibleLabel})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">توضیح یا دستور اداری همراه (اختیاری):</label>
+                <textarea
+                  value={bulkRedirectComment}
+                  onChange={e => setBulkRedirectComment(e.target.value)}
+                  placeholder="دلیل هدایت دسته‌جمعی یا دستور مصوب جلسه..."
+                  rows={3}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-500"
+                />
+              </div>
+
+              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300 leading-relaxed">
+                با اعمال این دستور، تمامی پرونده‌های انتخاب‌شده به مرحله «{WORKFLOW_STAGES[bulkRedirectTargetStage]?.label}» جهش کرده و کارتابل مسئول جدید بر اساس الگوی سازمانی تنظیم می‌شود.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIsBulkRedirectModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkRedirect}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 transition-all cursor-pointer shadow-lg shadow-purple-600/20 flex items-center gap-1.5"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>اعمال هدایت گروهی ({selectedEvalIds.length} مورد)</span>
               </button>
             </div>
           </div>

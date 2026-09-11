@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { validateEmployeeInput } from '../utils/validation';
 import { db, CURRENT_ACTIVE_PERIOD } from '../utils/db';
 import { 
@@ -38,6 +39,7 @@ interface EmployeesProps {
   onUpdateEmployee: (id: string, emp: Omit<Employee, 'id'>) => void;
   onBulkUpdateEmployees?: (employees: Employee[]) => void;
   onDeleteEmployee: (id: string) => void;
+  onBulkDeleteEmployees?: (ids: string[]) => void;
   onStartEvaluation: (empId: string) => void;
   theme?: 'dark' | 'light';
 }
@@ -81,6 +83,7 @@ export default function Employees({
   onUpdateEmployee,
   onBulkUpdateEmployees,
   onDeleteEmployee,
+  onBulkDeleteEmployees,
   onStartEvaluation,
   theme = 'light'
 }: EmployeesProps) {
@@ -92,8 +95,51 @@ export default function Employees({
   const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(null);
   const [deleteToast, setDeleteToast] = useState<string | null>(null);
 
-  const isAdminUser = (emp: Employee) => {
-    return emp.role === 'admin' || emp.username === 'admin' || emp.code === 'ADMIN-001';
+  // Bulk Selection State for Batch Actions
+  const [selectedEmpIds, setSelectedEmpIds] = useState<Set<string>>(new Set());
+
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+
+  const isProtectedAdmin = (emp: Employee) => {
+    return emp.username?.toLowerCase() === 'admin' && emp.code === 'ADMIN-001';
+  };
+
+  const handleToggleSelectAll = () => {
+    // Only select non-root-admin employees to protect root admin account
+    const selectable = filteredEmployees.filter(e => !isProtectedAdmin(e));
+    if (selectedEmpIds.size === selectable.length) {
+      setSelectedEmpIds(new Set());
+    } else {
+      setSelectedEmpIds(new Set(selectable.map(e => e.id)));
+    }
+  };
+
+  const handleToggleSelect = (emp: Employee, e?: React.MouseEvent | React.ChangeEvent) => {
+    if (e) e.stopPropagation();
+    if (isProtectedAdmin(emp)) {
+      return;
+    }
+    const next = new Set(selectedEmpIds);
+    if (next.has(emp.id)) {
+      next.delete(emp.id);
+    } else {
+      next.add(emp.id);
+    }
+    setSelectedEmpIds(next);
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (selectedEmpIds.size === 0) return;
+    const count = selectedEmpIds.size;
+    if (onBulkDeleteEmployees) {
+      onBulkDeleteEmployees(Array.from(selectedEmpIds));
+    } else {
+      selectedEmpIds.forEach(id => onDeleteEmployee(id));
+    }
+    setSelectedEmpIds(new Set());
+    setIsBulkDeleteModalOpen(false);
+    setDeleteToast(`تعداد ${count} پرونده پرسنلی با موفقیت به صورت گروهی حذف شدند.`);
+    setTimeout(() => setDeleteToast(null), 4000);
   };
 
   // Bulk Import State (Legacy quick modal)
@@ -727,6 +773,33 @@ export default function Employees({
         </div>
       </div>
 
+      {/* Bulk Selection Actions Bar */}
+      {selectedEmpIds.size > 0 && (
+        <div className="bg-teal-950/40 border border-teal-500/30 p-3.5 rounded-2xl flex items-center justify-between animate-in fade-in flex-wrap gap-2 shadow-lg">
+          <div className="flex items-center gap-2 text-xs text-teal-300 font-bold">
+            <CheckCircle2 className="w-4 h-4 text-teal-400" />
+            <span>{selectedEmpIds.size} نفر از پرسنل برای عملیات دسته‌ای انتخاب شده‌اند</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsBulkDeleteModalOpen(true)}
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>حذف گروهی ({selectedEmpIds.size} نفر)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedEmpIds(new Set())}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              لغو انتخاب‌ها
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Employees Render Mode: Virtualized Table or Card Grid */}
       {viewMode === 'table' ? (
         <VirtualizedTable<Employee>
@@ -735,6 +808,20 @@ export default function Employees({
           containerHeight={580}
           keyExtractor={(emp) => emp.id}
           columns={[
+            { 
+              header: (
+                <div className="flex items-center justify-center">
+                  <input
+                    type="checkbox"
+                    checked={filteredEmployees.filter(e => !isProtectedAdmin(e)).length > 0 && selectedEmpIds.size === filteredEmployees.filter(e => !isProtectedAdmin(e)).length}
+                    onChange={handleToggleSelectAll}
+                    className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer"
+                    title="انتخاب همه پرسنل"
+                  />
+                </div>
+              ), 
+              className: 'w-10 text-center' 
+            },
             { header: 'اطلاعات پرسنلی و نام', className: 'w-64' },
             { header: 'کد و نام کاربری', className: 'w-44' },
             { header: 'واحد سازمانی', className: 'w-44' },
@@ -744,8 +831,23 @@ export default function Employees({
           ]}
           renderRow={(emp) => {
             const profile = profiles.find(p => p.id === emp.profileId);
+            const isProtected = isProtectedAdmin(emp);
             return (
               <div className="flex items-center w-full justify-between text-xs py-1">
+                {/* Selection Checkbox */}
+                <div className="w-10 text-center flex items-center justify-center shrink-0">
+                  {isProtected ? (
+                    <span title="مدیر سیستم محافظت شده">🔒</span>
+                  ) : (
+                    <input
+                      type="checkbox"
+                      checked={selectedEmpIds.has(emp.id)}
+                      onChange={(e) => handleToggleSelect(emp, e)}
+                      className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer"
+                    />
+                  )}
+                </div>
+
                 {/* Name & Avatar */}
                 <div className="w-64 flex items-center gap-2.5 shrink-0">
                   <div className="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700/80 flex items-center justify-center text-xs font-bold text-teal-400 shrink-0 shadow-inner">
@@ -799,7 +901,7 @@ export default function Employees({
                   >
                     <Edit3 className="w-3.5 h-3.5" />
                   </button>
-                  {isAdminUser(emp) ? (
+                  {isProtected ? (
                     <div 
                       className="p-1.5 text-slate-500 bg-slate-800/40 rounded-lg cursor-not-allowed opacity-50 flex items-center justify-center"
                       title="حساب مدیر ارشد سیستم (Admin) محافظت‌شده و غیرقابل حذف است"
@@ -826,6 +928,7 @@ export default function Employees({
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filteredEmployees.map((emp) => {
             const profile = profiles.find(p => p.id === emp.profileId);
+            const isProtectedGridEmp = isProtectedAdmin(emp);
             return (
               <div 
                 key={emp.id} 
@@ -835,6 +938,16 @@ export default function Employees({
                   {/* Employee Header */}
                   <div className="flex justify-between items-start gap-3">
                     <div className="flex items-center gap-3">
+                      {!isProtectedGridEmp ? (
+                        <input
+                          type="checkbox"
+                          checked={selectedEmpIds.has(emp.id)}
+                          onChange={(e) => handleToggleSelect(emp, e)}
+                          className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer w-4 h-4"
+                        />
+                      ) : (
+                        <span title="مدیر سیستم محافظت شده" className="text-xs">🔒</span>
+                      )}
                       <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-semibold text-teal-400">
                         {emp.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
                       </div>
@@ -857,7 +970,7 @@ export default function Employees({
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
-                      {isAdminUser(emp) ? (
+                      {isProtectedGridEmp ? (
                         <div 
                           className="p-1.5 text-slate-500 bg-slate-800/40 rounded-lg cursor-not-allowed opacity-50 flex items-center justify-center"
                           title="حساب مدیر ارشد سیستم (Admin) محافظت‌شده و غیرقابل حذف است"
@@ -1206,9 +1319,9 @@ export default function Employees({
         theme={theme}
       />
 
-      {/* In-App Delete Confirmation Modal (Protects against sandboxed iframe confirm blockage) */}
-      {employeeToDelete && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      {/* In-App Delete Confirmation Modal (Using createPortal to ensure visibility above all containers) */}
+      {employeeToDelete && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4" dir="rtl">
           <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in">
             <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
               <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
@@ -1270,7 +1383,64 @@ export default function Employees({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
+      )}
+
+      {/* In-App Bulk Delete Confirmation Modal (Using createPortal) */}
+      {isBulkDeleteModalOpen && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف گروهی پرسنل</h3>
+                <p className="text-[11px] text-slate-400">حذف همزمان {selectedEmpIds.size} پرونده پرسنلی</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs max-h-48 overflow-y-auto">
+              <div className="text-slate-400 font-medium mb-1">پرسنل انتخاب‌شده برای حذف:</div>
+              {Array.from(selectedEmpIds).map(id => {
+                const emp = employees.find(e => e.id === id);
+                return (
+                  <div key={id} className="flex justify-between items-center py-1 border-b border-slate-900 text-slate-200 text-xs">
+                    <span>{emp?.name || id}</span>
+                    <span className="font-mono text-teal-400 text-[11px]">{emp?.code}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                هشدار: این عملیات تمامی ارزیابی‌ها و سوابق متصل به این پرسنل را پاکسازی می‌کند و غیرقابل بازگشت است.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف گروهی ({selectedEmpIds.size} نفر)</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* Floating Success Toast */}

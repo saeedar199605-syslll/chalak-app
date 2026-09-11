@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { validateJobProfileInput } from '../utils/validation';
 import { 
   Briefcase, 
@@ -28,6 +29,7 @@ import {
   JobProfile, 
   Criterion, 
   ProfileItem, 
+  Employee,
   MIN_WEIGHT, 
   MAX_WEIGHT, 
   MAX_CRITERIA_COUNT, 
@@ -43,9 +45,11 @@ interface JobProfilesProps {
   onAddProfile: (prof: Omit<JobProfile, 'id'>) => void;
   onUpdateProfile: (id: string, prof: Omit<JobProfile, 'id'>) => void;
   onDeleteProfile: (id: string) => void;
+  onBulkDeleteProfiles?: (ids: string[]) => void;
   onToggleLockProfile: (id: string) => void;
   onAddCriterion?: (crit: Omit<Criterion, 'id'>) => boolean;
   theme?: 'dark' | 'light';
+  currentUser?: Employee | null;
 }
 
 export default function JobProfiles({
@@ -54,13 +58,46 @@ export default function JobProfiles({
   onAddProfile,
   onUpdateProfile,
   onDeleteProfile,
+  onBulkDeleteProfiles,
   onToggleLockProfile,
   onAddCriterion,
-  theme = 'dark'
+  theme = 'dark',
+  currentUser
 }: JobProfilesProps) {
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.username === 'admin' || currentUser?.code === 'ADMIN-001';
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
+  const [profileToDelete, setProfileToDelete] = useState<JobProfile | null>(null);
+  const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+
+  const handleToggleSelectProfile = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = new Set(selectedProfileIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedProfileIds(next);
+  };
+
+  const handleToggleSelectAllProfiles = () => {
+    if (selectedProfileIds.size === profiles.length) {
+      setSelectedProfileIds(new Set());
+    } else {
+      setSelectedProfileIds(new Set(profiles.map(p => p.id)));
+    }
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (selectedProfileIds.size === 0) return;
+    if (onBulkDeleteProfiles) {
+      onBulkDeleteProfiles(Array.from(selectedProfileIds));
+    } else {
+      selectedProfileIds.forEach(id => onDeleteProfile(id));
+    }
+    setSelectedProfileIds(new Set());
+    setIsBulkDeleteModalOpen(false);
+  };
 
   // Quick Criterion Add inside Profile Modal
   const [isQuickCritOpen, setIsQuickCritOpen] = useState(false);
@@ -362,6 +399,33 @@ export default function JobProfiles({
         </div>
       </div>
 
+      {/* Bulk Selection Actions Bar */}
+      {selectedProfileIds.size > 0 && (
+        <div className="bg-teal-950/40 border border-teal-500/30 p-3.5 rounded-2xl flex items-center justify-between animate-in fade-in flex-wrap gap-2 shadow-lg">
+          <div className="flex items-center gap-2 text-xs text-teal-300 font-bold">
+            <CheckCircle2 className="w-4 h-4 text-teal-400" />
+            <span>{selectedProfileIds.size} پروفایل شغلی برای عملیات دسته‌ای انتخاب شده‌اند</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsBulkDeleteModalOpen(true)}
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>حذف گروهی ({selectedProfileIds.size})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedProfileIds(new Set())}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              انصراف
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Profile Cards Grid */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {profiles.map((p) => {
@@ -372,20 +436,29 @@ export default function JobProfiles({
             <div 
               key={p.id} 
               className={`bg-slate-800/30 border rounded-2xl p-5 space-y-4 flex flex-col justify-between transition-all ${
-                p.locked ? 'border-slate-800' : 'border-slate-700/60 hover:border-slate-600'
+                selectedProfileIds.has(p.id) ? 'border-teal-500/60 ring-1 ring-teal-500/30' : p.locked ? 'border-slate-800' : 'border-slate-700/60 hover:border-slate-600'
               }`}
             >
               <div className="space-y-3">
                 {/* Profile Card Header */}
                 <div className="flex justify-between items-start gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-bold text-slate-100">{p.title}</h3>
-                      <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono font-semibold">
-                        {p.code}
-                      </span>
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedProfileIds.has(p.id)}
+                      onChange={(e) => handleToggleSelectProfile(p.id, e as any)}
+                      className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer w-4 h-4 mt-1"
+                      title="انتخاب برای عملیات دسته‌ای"
+                    />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-bold text-slate-100">{p.title}</h3>
+                        <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono font-semibold">
+                          {p.code}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">خانواده شغلی: {p.family} • شامل {p.items.length} شاخص ارزیابی</p>
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-1">خانواده شغلی: {p.family} • شامل {p.items.length} شاخص ارزیابی</p>
                   </div>
 
                   <div className="flex gap-1.5 shrink-0">
@@ -404,26 +477,22 @@ export default function JobProfiles({
 
                     <button
                       onClick={() => openForm(p)}
-                      disabled={p.locked}
+                      disabled={!isAdmin && p.locked}
                       className={`p-2 rounded-xl border text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all ${
-                        p.locked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'
+                        !isAdmin && p.locked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'
                       }`}
-                      title="ویرایش معیارهای پروفایل"
+                      title={isAdmin && p.locked ? "ویرایش پروفایل (اختیار مدیر ارشد)" : "ویرایش معیارهای پروفایل"}
                     >
                       <Edit3 className="w-3.5 h-3.5" />
                     </button>
 
                     <button
-                      onClick={() => {
-                        if (confirm(`آیا از حذف پروفایل شغلی «${p.title}» مطمئن هستید؟`)) {
-                          onDeleteProfile(p.id);
-                        }
-                      }}
-                      disabled={p.locked}
+                      onClick={() => setProfileToDelete(p)}
+                      disabled={!isAdmin && p.locked}
                       className={`p-2 rounded-xl border transition-all ${
-                        p.locked ? 'opacity-30 cursor-not-allowed text-slate-600' : 'text-slate-400 hover:text-red-400 hover:bg-slate-800 cursor-pointer'
+                        !isAdmin && p.locked ? 'opacity-30 cursor-not-allowed text-slate-600' : 'text-slate-400 hover:text-red-400 hover:bg-slate-800 cursor-pointer'
                       }`}
-                      title="حذف پروفایل"
+                      title={isAdmin && p.locked ? "حذف پروفایل (اختیار مدیر ارشد)" : "حذف پروفایل"}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -772,6 +841,119 @@ export default function JobProfiles({
         onClose={() => setIsExchangeModalOpen(false)}
         theme={theme}
       />
+
+      {/* Delete Single Profile Confirmation Modal */}
+      {profileToDelete && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in my-auto">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف پروفایل شایستگی شغلی</h3>
+                <p className="text-[11px] text-slate-400">کد شغل: {profileToDelete.code}</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>عنوان شغل:</span>
+                <span className="font-bold text-slate-100">{profileToDelete.title}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>خانواده شغلی:</span>
+                <span className="text-teal-400">{profileToDelete.family}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>تعداد شاخص‌های مرتبط:</span>
+                <span className="font-bold font-mono">{profileToDelete.items.length} شاخص</span>
+              </div>
+            </div>
+
+            <div className="bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <p className="font-bold text-rose-200 mb-0.5">هشدار یکپارچگی ساختار:</p>
+              <p>در صورت انتساب این پروفایل به کارکنان، رده شغلی پرسنل مرتبط آزاد شده تا بلافاصله بتوانید پروفایل جدید به آنها اختصاص دهید.</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setProfileToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteProfile(profileToDelete.id);
+                  setProfileToDelete(null);
+                }}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف قطعی</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Bulk Delete Profiles Confirmation Modal */}
+      {isBulkDeleteModalOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in my-auto">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف گروهی پروفایل‌های شغلی</h3>
+                <p className="text-[11px] text-slate-400">حذف همزمان {selectedProfileIds.size} پروفایل شغلی</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs max-h-48 overflow-y-auto">
+              <div className="text-slate-400 font-medium mb-1">پروفایل‌های انتخاب‌شده برای حذف:</div>
+              {Array.from(selectedProfileIds).map(id => {
+                const p = profiles.find(item => item.id === id);
+                return (
+                  <div key={id} className="flex justify-between items-center py-1 border-b border-slate-900 text-slate-200 text-xs">
+                    <span>{p?.title || 'پروفایل'}</span>
+                    <span className="font-mono text-teal-400 text-[11px]">{p?.code}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <p className="font-bold text-rose-200 mb-0.5">هشدار یکپارچگی داده‌ها:</p>
+              <p>کلیه پروفایل‌های انتخاب‌شده حذف شده و پرسنل متصل به این رده‌ها آزاد می‌شوند.</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف گروهی ({selectedProfileIds.size} مورد)</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

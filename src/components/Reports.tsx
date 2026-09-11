@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   TrendingUp, 
   Download, 
@@ -14,7 +15,9 @@ import {
   FileCheck2,
   CheckCircle2,
   Calendar,
-  Sparkles
+  Sparkles,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { Evaluation, Employee, JobProfile, Criterion, CATEGORIES, getGrade, GRADE_DETAILS } from '../types';
 import RadarChartD3, { CompetencyDimensionData } from './RadarChartD3';
@@ -26,16 +29,63 @@ interface ReportsProps {
   employees: Employee[];
   profiles: JobProfile[];
   criteria: Criterion[];
+  currentUserRole?: 'admin' | 'supervisor' | 'employee';
+  onDeleteEvaluation?: (id: string) => void;
+  onBulkDeleteEvaluations?: (ids: string[]) => void;
+  onSelectEvaluation?: (id: string) => void;
+  onNavigate?: (tab: any) => void;
+  currentUser?: Employee | null;
 }
 
 export default function Reports({
   evaluations,
   employees,
   profiles,
-  criteria
+  criteria,
+  currentUserRole = 'admin',
+  onDeleteEvaluation,
+  onBulkDeleteEvaluations,
+  onSelectEvaluation,
+  onNavigate,
+  currentUser
 }: ReportsProps) {
+  const isAdmin = currentUserRole === 'admin';
   // Only report evaluations that have actual scores
   const ratedEvals = evaluations.filter(ev => ev.scores.some(s => s.value > 0));
+
+  const [selectedReportEvalIds, setSelectedReportEvalIds] = useState<Set<string>>(new Set());
+  const [reportEvalToDelete, setReportEvalToDelete] = useState<Evaluation | null>(null);
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+
+  const handleToggleSelectAll = () => {
+    if (selectedReportEvalIds.size === ratedEvals.length) {
+      setSelectedReportEvalIds(new Set());
+    } else {
+      setSelectedReportEvalIds(new Set(ratedEvals.map(e => e.id)));
+    }
+  };
+
+  const handleToggleSelect = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = new Set(selectedReportEvalIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedReportEvalIds(next);
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (selectedReportEvalIds.size === 0) return;
+    if (onBulkDeleteEvaluations) {
+      onBulkDeleteEvaluations(Array.from(selectedReportEvalIds));
+    } else if (onDeleteEvaluation) {
+      selectedReportEvalIds.forEach(id => onDeleteEvaluation(id));
+    }
+    setSelectedReportEvalIds(new Set());
+    setIsBulkDeleteModalOpen(false);
+  };
 
   const calculateScore = (ev: Evaluation) => {
     const scoredItems = ev.scores.filter(s => s.value > 0);
@@ -376,13 +426,58 @@ export default function Reports({
 
       {/* Full Detail Results Table */}
       <div className="bg-slate-800/20 border border-slate-800 rounded-2xl overflow-hidden p-5 space-y-4">
-        <h3 className="text-sm font-bold text-slate-200">کارنامه جامع ارزیابی و مربیگری سازمان</h3>
+        <div className="flex justify-between items-center flex-wrap gap-3">
+          <h3 className="text-sm font-bold text-slate-200">کارنامه جامع ارزیابی و مربیگری سازمان</h3>
+          <span className="text-xs text-slate-400 font-mono">
+            {ratedEvals.length} کارنامه ثبت‌شده
+          </span>
+        </div>
+
+        {/* Bulk Actions Bar for Reports */}
+        {selectedReportEvalIds.size > 0 && (
+          <div className="bg-teal-950/40 border border-teal-500/30 p-3 rounded-2xl flex items-center justify-between animate-in fade-in flex-wrap gap-2">
+            <div className="flex items-center gap-2 text-xs text-teal-300 font-bold">
+              <CheckCircle2 className="w-4 h-4 text-teal-400" />
+              <span>{selectedReportEvalIds.size} کارنامه ارزیابی برای عملیات انتخاب شده است</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {(isAdmin || onDeleteEvaluation) && (
+                <button
+                  type="button"
+                  onClick={() => setIsBulkDeleteModalOpen(true)}
+                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>حذف گروهی ({selectedReportEvalIds.size} مورد)</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedReportEvalIds(new Set())}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                لغو انتخاب‌ها
+              </button>
+            </div>
+          </div>
+        )}
 
         {ratedEvals.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-slate-300">
               <thead>
                 <tr className="border-b border-slate-800 text-slate-500 font-bold">
+                  {(isAdmin || onDeleteEvaluation) && (
+                    <th className="pb-3 text-center w-10">
+                      <input
+                        type="checkbox"
+                        checked={ratedEvals.length > 0 && selectedReportEvalIds.size === ratedEvals.length}
+                        onChange={handleToggleSelectAll}
+                        className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer"
+                        title="انتخاب همه کارنامه‌ها"
+                      />
+                    </th>
+                  )}
                   <th className="pb-3 text-right">نام همکار</th>
                   <th className="pb-3 text-right">کد پرسنلی</th>
                   <th className="pb-3 text-right">واحد سازمانی</th>
@@ -391,6 +486,9 @@ export default function Reports({
                   <th className="pb-3 text-center">نمره کل</th>
                   <th className="pb-3 text-center">طبقه</th>
                   <th className="pb-3 text-center">وضعیت سند</th>
+                  {(isAdmin || onDeleteEvaluation) && (
+                    <th className="pb-3 text-center w-20">عملیات</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/40">
@@ -403,6 +501,16 @@ export default function Reports({
 
                   return (
                     <tr key={ev.id} className="hover:bg-slate-800/10 transition-colors">
+                      {(isAdmin || onDeleteEvaluation) && (
+                        <td className="py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedReportEvalIds.has(ev.id)}
+                            onChange={(e) => handleToggleSelect(ev.id, e as unknown as React.MouseEvent)}
+                            className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer"
+                          />
+                        </td>
+                      )}
                       <td className="py-3 font-semibold text-slate-200">{emp?.name || 'نامشخص'}</td>
                       <td className="py-3 text-slate-400 font-mono">{emp?.code}</td>
                       <td className="py-3 text-slate-400">{emp?.unit}</td>
@@ -423,6 +531,18 @@ export default function Reports({
                           <span className="text-slate-500">✏️ پیش‌نویس</span>
                         )}
                       </td>
+                      {(isAdmin || onDeleteEvaluation) && (
+                        <td className="py-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setReportEvalToDelete(ev)}
+                            className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                            title="حذف این کارنامه ارزیابی"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -435,6 +555,129 @@ export default function Reports({
           </div>
         )}
       </div>
+
+      {/* Delete Single Evaluation in Reports Modal */}
+      {reportEvalToDelete && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف کارنامه از سامانه</h3>
+                <p className="text-[11px] text-slate-400">این عملیات بلافاصله انجام شده و غیرقابل بازگشت است</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>همکار:</span>
+                <span className="font-bold text-slate-100">
+                  {employees.find(e => e.id === reportEvalToDelete.empId)?.name || 'نامشخص'}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>دوره:</span>
+                <span className="text-teal-400 font-mono">{reportEvalToDelete.period}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>وضعیت پرونده:</span>
+                <span className="font-bold">{reportEvalToDelete.status === 'locked' ? 'قفل شده' : 'پیش‌نویس'}</span>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                توجه: این کارنامه از بخش ارزیابی‌ها، گزارشات مدیریتی و ماتریس ۹گانه استعداد پاک خواهد شد.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setReportEvalToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onDeleteEvaluation) {
+                    onDeleteEvaluation(reportEvalToDelete.id);
+                  }
+                  setReportEvalToDelete(null);
+                }}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>بله، حذف کارنامه</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Bulk Delete in Reports Modal */}
+      {isBulkDeleteModalOpen && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف گروهی کارنامه‌ها</h3>
+                <p className="text-[11px] text-slate-400">حذف همزمان {selectedReportEvalIds.size} کارنامه انتخاب‌شده</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs max-h-48 overflow-y-auto">
+              <div className="text-slate-400 font-medium mb-1">کارنامه‌های انتخاب‌شده:</div>
+              {Array.from(selectedReportEvalIds).map(id => {
+                const ev = evaluations.find(e => e.id === id);
+                const emp = employees.find(e => e.id === ev?.empId);
+                const sc = ev ? calculateScore(ev) : 0;
+                return (
+                  <div key={id} className="flex justify-between items-center py-1 border-b border-slate-900 text-slate-200 text-xs">
+                    <span>{emp?.name || 'همکار'} ({ev?.period})</span>
+                    <span className="font-mono text-teal-400 text-[11px]">{sc.toFixed(1)} / ۱۰۰</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                هشدار: با تایید، تمامی پرونده‌های انتخاب‌شده به طور کامل از سامانه حذف خواهند شد.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف گروهی ({selectedReportEvalIds.size} مورد)</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

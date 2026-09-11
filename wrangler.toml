@@ -1,7 +1,8 @@
 name = "chalak-performance"
-compatibility_date = "2024-03-20"
 pages_build_output_dir = "dist"
+compatibility_date = "2026-03-01"
 
+# اتصال دیتابیس KV
 [[kv_namespaces]]
 binding = "CHALAK_DB"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "YOUR_KV_NAMESPACE_ID_HERE"

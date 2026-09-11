@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   ClipboardCheck, 
   Plus, 
@@ -30,11 +31,12 @@ import {
   Check,
   Table as TableIcon,
   FileSpreadsheet,
-  Calculator
+  Calculator,
+  GitFork
 } from 'lucide-react';
 import ExcelIntegrationCenter from './ExcelIntegrationCenter';
 import AIFeedbackAssistant from './AIFeedbackAssistant';
-import { calculateKpiScore } from '../utils/formulaEngine';
+import { calculateKpiScore, calculateMultiSourceCompositeScore } from '../utils/formulaEngine';
 import { 
   Evaluation, 
   Employee, 
@@ -114,6 +116,7 @@ interface EvaluationsProps {
   onUpdateEvaluation: (id: string, ev: Evaluation) => void;
   onBulkUpdateEvaluations?: (evals: Evaluation[]) => void;
   onDeleteEvaluation: (id: string) => void;
+  onBulkDeleteEvaluations?: (ids: string[]) => void;
   activeEvalId: string | null;
   onSetActiveEval: (id: string | null) => void;
   currentUser?: Employee | null;
@@ -128,6 +131,7 @@ export default function Evaluations({
   onUpdateEvaluation,
   onBulkUpdateEvaluations,
   onDeleteEvaluation,
+  onBulkDeleteEvaluations,
   activeEvalId,
   onSetActiveEval,
   currentUser
@@ -137,6 +141,45 @@ export default function Evaluations({
   const [newEmpId, setNewEmpId] = useState('');
   const [newPeriod, setNewPeriod] = useState('نیمه اول ۱۴۰۵');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Bulk selection state
+  const [selectedEvalIds, setSelectedEvalIds] = useState<Set<string>>(new Set());
+
+  // Determine admin privileges
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.username === 'admin' || currentUser?.code === 'ADMIN-001';
+
+  const handleToggleSelectAll = () => {
+    if (selectedEvalIds.size === filteredEvaluations.length) {
+      setSelectedEvalIds(new Set());
+    } else {
+      setSelectedEvalIds(new Set(filteredEvaluations.map(e => e.id)));
+    }
+  };
+
+  const handleToggleSelect = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = new Set(selectedEvalIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedEvalIds(next);
+  };
+
+  const [evalToDelete, setEvalToDelete] = useState<Evaluation | null>(null);
+  const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
+
+  const handleConfirmBulkDelete = () => {
+    if (selectedEvalIds.size === 0) return;
+    if (onBulkDeleteEvaluations) {
+      onBulkDeleteEvaluations(Array.from(selectedEvalIds));
+    } else {
+      selectedEvalIds.forEach(id => onDeleteEvaluation(id));
+    }
+    setSelectedEvalIds(new Set());
+    setIsBulkDeleteConfirmOpen(false);
+  };
 
   // Bias and Tone Audit States
   const [isBiasModalOpen, setIsBiasModalOpen] = useState(false);
@@ -223,7 +266,26 @@ export default function Evaluations({
   const handleScoreChange = (scoreIndex: number, val: number) => {
     if (!activeEval || activeEval.status === 'locked') return;
     const updatedScores = [...activeEval.scores];
-    updatedScores[scoreIndex] = { ...updatedScores[scoreIndex], value: val };
+    const currentScoreItem = { ...updatedScores[scoreIndex] };
+    const crit = criteria.find(c => c.id === currentScoreItem.cid);
+
+    if (crit?.scoringSource === 'multi_source') {
+      const currentBreakdown = currentScoreItem.sourceBreakdown || {};
+      const updatedBreakdown = {
+        ...currentBreakdown,
+        supervisorScore: val
+      };
+      const comp = calculateMultiSourceCompositeScore(crit, updatedBreakdown);
+      currentScoreItem.sourceBreakdown = updatedBreakdown;
+      currentScoreItem.value = comp.score;
+      if (!currentScoreItem.doc || currentScoreItem.doc.startsWith('میانگین') || currentScoreItem.doc.startsWith('سامانه') || currentScoreItem.doc.startsWith('در انتظار')) {
+        currentScoreItem.doc = comp.docText;
+      }
+    } else {
+      currentScoreItem.value = val;
+    }
+
+    updatedScores[scoreIndex] = currentScoreItem;
     onUpdateEvaluation(activeEval.id, { ...activeEval, scores: updatedScores });
   };
 
@@ -506,6 +568,33 @@ export default function Evaluations({
             </div>
           </div>
 
+          {/* Bulk Selection Actions Bar */}
+          {selectedEvalIds.size > 0 && (
+            <div className="bg-teal-950/40 border border-teal-500/30 p-3 rounded-2xl flex items-center justify-between animate-in fade-in flex-wrap gap-2">
+              <div className="flex items-center gap-2 text-xs text-teal-300 font-bold">
+                <CheckCircle2 className="w-4 h-4 text-teal-400" />
+                <span>{selectedEvalIds.size} پرونده ارزیابی برای عملیات دسته‌ای انتخاب شده است</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkDeleteConfirmOpen(true)}
+                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>حذف دسته‌ای ({selectedEvalIds.size} مورد)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedEvalIds(new Set())}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  لغو انتخاب‌ها
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Evaluations Virtualized Table */}
           {filteredEvaluations.length > 0 ? (
             <VirtualizedTable<Evaluation>
@@ -514,6 +603,20 @@ export default function Evaluations({
               containerHeight={520}
               keyExtractor={(ev) => ev.id}
               columns={[
+                { 
+                  header: (
+                    <div className="flex items-center justify-center">
+                      <input
+                        type="checkbox"
+                        checked={filteredEvaluations.length > 0 && selectedEvalIds.size === filteredEvaluations.length}
+                        onChange={handleToggleSelectAll}
+                        className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer"
+                        title="انتخاب همه ارزیابی‌ها"
+                      />
+                    </div>
+                  ), 
+                  className: 'w-12 text-center' 
+                },
                 { header: 'پرسنل', className: 'w-1/4 text-right' },
                 { header: 'عنوان شغلی و واحد', className: 'w-1/4 text-right' },
                 { header: 'دوره ارزیابی', className: 'w-1/6 text-center' },
@@ -534,6 +637,14 @@ export default function Evaluations({
                     key={ev.id}
                     className="flex items-center text-xs w-full py-1 text-slate-200"
                   >
+                    <div className="w-12 text-center flex items-center justify-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedEvalIds.has(ev.id)}
+                        onChange={(e) => handleToggleSelect(ev.id, e)}
+                        className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer"
+                      />
+                    </div>
                     <div className="w-1/4 font-semibold text-slate-200 truncate">
                       {emp?.name || 'نامشخص'}
                       <span className="text-[10px] text-slate-500 font-mono block">{emp?.code}</span>
@@ -578,22 +689,11 @@ export default function Evaluations({
                         >
                           {ev.status === 'locked' ? 'مشاهده' : 'تکمیل'}
                         </button>
-                        {(ev.status !== 'locked' || currentUser?.role === 'admin') && (
+                        {(isAdmin || ev.status !== 'locked') && (
                           <button
-                            onClick={() => {
-                              const confirmMessage = ev.status === 'locked'
-                                ? '⚠️ هشدار مدیریتی: این ارزیابی «نهایی و قفل‌شده» است. حذف آن غیرقابل بازگشت بوده و سابقه رسمی عملکرد را از سامانه پاک می‌کند. آیا با مسئولیت مدیر سیستم، حذف این پرونده قطعی را تأیید می‌کنید؟'
-                                : 'آیا از حذف این ارزیابی پیش‌نویس مطمئن هستید؟';
-                              if (confirm(confirmMessage)) {
-                                onDeleteEvaluation(ev.id);
-                              }
-                            }}
-                            className={`p-1 rounded transition-colors cursor-pointer ${
-                              ev.status === 'locked'
-                                ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10'
-                                : 'text-slate-500 hover:text-red-400 hover:bg-slate-800'
-                            }`}
-                            title={ev.status === 'locked' ? 'حذف ارزیابی نهایی (مدیر سیستم)' : 'حذف ارزیابی'}
+                            onClick={() => setEvalToDelete(ev)}
+                            className="p-1 text-slate-500 hover:text-rose-400 rounded hover:bg-slate-800 transition-colors cursor-pointer"
+                            title={ev.status === 'locked' ? 'حذف ارزیابی نهایی شده (اختیار مدیر ارشد سیستم)' : 'حذف ارزیابی'}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -627,12 +727,25 @@ export default function Evaluations({
               </div>
             </div>
 
-            <button
-              onClick={() => onSetActiveEval(null)}
-              className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
-            >
-              بازگشت به ارزیابی‌ها
-            </button>
+            <div className="flex items-center gap-2">
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setEvalToDelete(activeEval)}
+                  className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition-all"
+                  title="حذف این کارنامه ارزیابی"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>حذف کارنامه</span>
+                </button>
+              )}
+              <button
+                onClick={() => onSetActiveEval(null)}
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                بازگشت به ارزیابی‌ها
+              </button>
+            </div>
           </div>
 
           {/* Step Progress Visual */}
@@ -701,6 +814,43 @@ export default function Evaluations({
                           <p className="text-[10px] text-slate-400 mt-1 leading-relaxed max-w-3xl">{crit.def}</p>
                           {crit.source && (
                             <p className="text-[9px] text-slate-500 mt-0.5 font-mono">منبع داده رسمی: {crit.source} • سنجه: {crit.method}</p>
+                          )}
+
+                          {crit.scoringSource === 'multi_source' && (
+                            <div className="mt-2.5 bg-slate-950/80 border border-teal-500/30 rounded-xl p-3 space-y-2">
+                              <div className="flex items-center justify-between text-[11px] font-bold text-teal-300 flex-wrap gap-1">
+                                <span className="flex items-center gap-1.5">
+                                  <GitFork className="w-3.5 h-3.5 text-teal-400" />
+                                  <span>شاخص چندمنبعی (تغذیه ترکیبی از چند سامانه و ارزیابی سرپرست)</span>
+                                </span>
+                                <span className="font-mono text-[10px] bg-teal-500/15 text-teal-300 border border-teal-500/30 px-2 py-0.5 rounded-md">
+                                  امتیاز ترکیبی نهایی: {score.value > 0 ? `${score.value} از ۵` : 'در انتظار تجمیع داده‌ها'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[10px]">
+                                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800">
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-slate-400">📊 داده MIS (تولید/کیفیت):</span>
+                                    <span className="font-mono font-bold text-cyan-400">{score.sourceBreakdown?.misScore ? `${score.sourceBreakdown.misScore} از ۵` : 'در انتظار ایمپورت'}</span>
+                                  </div>
+                                  <div className="text-[9px] text-slate-500 mt-1">سهم وزنی در شاخص: {crit.multiSourceConfig?.items?.find(i => i.source === 'mis')?.weightPercent ?? 50}٪</div>
+                                </div>
+                                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800">
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-slate-400">⏱️ حضور و غیاب کسری:</span>
+                                    <span className="font-mono font-bold text-indigo-400">{score.sourceBreakdown?.kasraScore ? `${score.sourceBreakdown.kasraScore} از ۵` : 'در انتظار ایمپورت'}</span>
+                                  </div>
+                                  <div className="text-[9px] text-slate-500 mt-1">سهم وزنی در شاخص: {crit.multiSourceConfig?.items?.find(i => i.source === 'kasra')?.weightPercent ?? 25}٪</div>
+                                </div>
+                                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800">
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-slate-400">👤 نظر کیفی سرپرست:</span>
+                                    <span className="font-mono font-bold text-emerald-400">{score.sourceBreakdown?.supervisorScore ? `${score.sourceBreakdown.supervisorScore} از ۵` : 'ثبت با دکمه‌های زیر'}</span>
+                                  </div>
+                                  <div className="text-[9px] text-slate-500 mt-1">سهم وزنی در شاخص: {crit.multiSourceConfig?.items?.find(i => i.source === 'supervisor')?.weightPercent ?? 25}٪</div>
+                                </div>
+                              </div>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -973,7 +1123,20 @@ export default function Evaluations({
               )}
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* ADMIN OR UNLOCKED SUPERVISOR DELETE ACTION IN BOTTOM BAR */}
+              {(isAdmin || activeEval.status !== 'locked') && (
+                <button
+                  type="button"
+                  onClick={() => setEvalToDelete(activeEval)}
+                  className="px-3.5 py-2 bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                  title="حذف کامل این پرونده ارزیابی (اختیار مدیر سیستم)"
+                >
+                  <Trash2 className="w-4 h-4 text-rose-500" />
+                  <span>حذف این ارزیابی</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => onSetActiveEval(null)}
@@ -1364,6 +1527,136 @@ export default function Evaluations({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Delete Single Evaluation Confirmation Modal */}
+      {evalToDelete && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف کارنامه ارزیابی</h3>
+                <p className="text-[11px] text-slate-400">
+                  {evalToDelete.status === 'locked' ? 'کارنامه نهایی شده (اختیار مدیر ارشد)' : 'کارنامه در جریان ارزیابی'}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>نام همکار:</span>
+                <span className="font-bold text-slate-100">
+                  {employees.find(e => e.id === evalToDelete.empId)?.name || 'نامشخص'}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>دوره ارزیابی:</span>
+                <span className="text-teal-400 font-mono">{evalToDelete.period}</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>نمره کل عملکرد:</span>
+                <span className="font-bold font-mono">{evalToDelete.overallScore.toFixed(1)} / ۱۰۰</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>وضعیت:</span>
+                <span className="font-bold">{evalToDelete.status === 'locked' ? 'قفل شده' : 'پیش‌نویس'}</span>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                توجه: این ارزیابی و تمام ریزنمرات، بازخوردها و مصوبات کالیبراسیون آن به صورت دائمی از سامانه حذف خواهد شد.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setEvalToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteEvaluation(evalToDelete.id);
+                  if (activeEvalId === evalToDelete.id) {
+                    onSetActiveEval(null);
+                  }
+                  setEvalToDelete(null);
+                }}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>بله، حذف کارنامه</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Bulk Delete Evaluations Confirmation Modal */}
+      {isBulkDeleteConfirmOpen && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف گروهی ارزیابی‌ها</h3>
+                <p className="text-[11px] text-slate-400">حذف همزمان {selectedEvalIds.size} پرونده ارزیابی</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs max-h-48 overflow-y-auto">
+              <div className="text-slate-400 font-medium mb-1">کارنامه‌های انتخاب‌شده برای حذف:</div>
+              {Array.from(selectedEvalIds).map(id => {
+                const ev = evaluations.find(e => e.id === id);
+                const emp = employees.find(e => e.id === ev?.empId);
+                const sc = ev ? calculateScore(ev) : 0;
+                return (
+                  <div key={id} className="flex justify-between items-center py-1 border-b border-slate-900 text-slate-200 text-xs">
+                    <span>{emp?.name || 'همکار'} ({ev?.period})</span>
+                    <span className="font-mono text-teal-400 text-[11px]">{sc.toFixed(1)} / ۱۰۰</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>
+                هشدار: این عملیات دائمی بوده و تمامی کارنامه‌ها و داده‌های نمره‌دهی انتخاب‌شده پاک خواهند شد.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteConfirmOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف گروهی ({selectedEvalIds.size} مورد)</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

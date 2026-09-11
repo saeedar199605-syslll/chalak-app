@@ -28,17 +28,26 @@ import {
   Clock,
   UserCheck,
   Cpu,
-  Database
+  Database,
+  GitFork,
+  X
 } from 'lucide-react';
 import { Criterion, CategoryKey, CATEGORIES, Employee, JobProfile, Evaluation, CriterionScoringSource, MisMetricKey } from '../types';
 import UniversalDataExchange, { DataExchangeConfig } from './UniversalDataExchange';
 import KpiFormulaEngineModal from './KpiFormulaEngineModal';
+import MultiSourceCriteriaImportModal, { MergeStrategy } from './MultiSourceCriteriaImportModal';
+import { db } from '../utils/db';
 
 interface CriteriaBankProps {
   criteria: Criterion[];
   onAddCriterion: (crit: Omit<Criterion, 'id'>) => boolean;
   onUpdateCriterion: (id: string, crit: Omit<Criterion, 'id'>) => boolean;
   onDeleteCriterion: (id: string) => void;
+  onBulkDeleteCriteria?: (ids: string[]) => void;
+  onBatchAddCriteria?: (
+    newOrUpdatedList: Array<Omit<Criterion, 'id'> & { id?: string }>,
+    mode?: MergeStrategy
+  ) => void;
   employees?: Employee[];
   profiles?: JobProfile[];
   evaluations?: Evaluation[];
@@ -95,6 +104,8 @@ export default function CriteriaBank({
   onAddCriterion, 
   onUpdateCriterion, 
   onDeleteCriterion,
+  onBulkDeleteCriteria,
+  onBatchAddCriteria,
   employees = [],
   profiles = [],
   evaluations = [],
@@ -103,17 +114,43 @@ export default function CriteriaBank({
 }: CriteriaBankProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCat, setSelectedCat] = useState<CategoryKey | 'ALL'>('ALL');
+
+  // Bulk selection state for criteria
+  const [selectedCritIds, setSelectedCritIds] = useState<Set<string>>(new Set());
   
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [criterionToDelete, setCriterionToDelete] = useState<Criterion | null>(null);
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+
+  // Multi-Source Bulk Import Modal State
+  const [isMultiSourceModalOpen, setIsMultiSourceModalOpen] = useState(false);
+  const [multiSourceNotice, setMultiSourceNotice] = useState<string | null>(null);
 
   // Bulk Import Modal State
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkStatusMsg, setBulkStatusMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const handleCommitMultiSource = (
+    mergedCriteria: Array<Omit<Criterion, 'id'> & { id?: string }>,
+    strategy: MergeStrategy,
+    stats: { total: number; added: number; updated: number; departments: string[] }
+  ) => {
+    if (onBatchAddCriteria) {
+      onBatchAddCriteria(mergedCriteria, strategy);
+    } else {
+      const mode = strategy === 'replace' ? 'replace' : strategy === 'skip_existing' ? 'skip_existing' : 'merge';
+      db.saveCriteriaBatch(mergedCriteria, mode);
+    }
+
+    setMultiSourceNotice(
+      `تلفیق موفقیت‌آمیز: تعداد ${stats.total} شاخص از ${stats.departments.length} بخش سازمانی با موفقیت در بانک شاخص‌ها ثبت شد (${stats.added} شاخص جدید، ${stats.updated} به‌روزرسانی).`
+    );
+    setTimeout(() => setMultiSourceNotice(null), 8000);
+  };
 
   const criteriaExchangeConfig: DataExchangeConfig<Criterion> = {
     entityName: 'بانک مرکزی شاخص‌ها و سنجه‌ها',
@@ -354,6 +391,41 @@ export default function CriteriaBank({
     return matchesSearch && matchesCat && matchesSource;
   });
 
+  const handleToggleSelectAll = () => {
+    if (selectedCritIds.size === filteredCriteria.length) {
+      setSelectedCritIds(new Set());
+    } else {
+      setSelectedCritIds(new Set(filteredCriteria.map(c => c.id)));
+    }
+  };
+
+  const handleToggleSelect = (id: string, e?: React.MouseEvent | React.ChangeEvent) => {
+    if (e) e.stopPropagation();
+    const next = new Set(selectedCritIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedCritIds(next);
+  };
+
+  const handleExecuteBulkDelete = () => {
+    if (selectedCritIds.size === 0) return;
+    setIsBulkDeleteModalOpen(true);
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (selectedCritIds.size === 0) return;
+    if (onBulkDeleteCriteria) {
+      onBulkDeleteCriteria(Array.from(selectedCritIds));
+    } else {
+      selectedCritIds.forEach(id => onDeleteCriterion(id));
+    }
+    setSelectedCritIds(new Set());
+    setIsBulkDeleteModalOpen(false);
+  };
+
   return (
     <div className="space-y-6 text-right" dir="rtl">
       {/* Header */}
@@ -365,6 +437,15 @@ export default function CriteriaBank({
           </p>
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsMultiSourceModalOpen(true)}
+            className="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all shadow-lg shadow-cyan-600/25 cursor-pointer"
+          >
+            <Layers className="w-4 h-4" />
+            <span>ورود چندبخشی و تلفیق شاخص‌ها (JSON/CSV)</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setIsFormulaModalOpen(true)}
@@ -402,6 +483,23 @@ export default function CriteriaBank({
           </button>
         </div>
       </div>
+
+      {/* Multi-Source Import Notice Alert */}
+      {multiSourceNotice && (
+        <div className="bg-gradient-to-r from-cyan-950/60 to-emerald-950/40 border border-cyan-500/40 text-cyan-200 p-4 rounded-2xl flex items-center justify-between gap-3 text-xs shadow-lg animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+            <span className="font-bold">{multiSourceNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMultiSourceNotice(null)}
+            className="text-cyan-400 hover:text-white p-1 rounded-lg cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Info Warning */}
       <div className="bg-amber-500/10 border border-amber-500/20 text-amber-200 p-4 rounded-2xl flex gap-3 text-xs leading-relaxed">
@@ -504,8 +602,46 @@ export default function CriteriaBank({
             <Clock className="w-3 h-3" />
             <span>کسری (حضور/غیاب)</span>
           </button>
+          <button
+            onClick={() => setSelectedSource('multi_source')}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all ${
+              selectedSource === 'multi_source'
+                ? 'bg-teal-600 text-white shadow-md'
+                : 'bg-slate-950 text-teal-400 hover:bg-teal-500/10 border border-teal-500/20'
+            }`}
+          >
+            <GitFork className="w-3 h-3" />
+            <span>چندمنبعی (ترکیبی)</span>
+          </button>
         </div>
       </div>
+
+      {/* Bulk Selection Actions Bar */}
+      {selectedCritIds.size > 0 && (
+        <div className="bg-teal-950/40 border border-teal-500/30 p-3.5 rounded-2xl flex items-center justify-between animate-in fade-in flex-wrap gap-2 shadow-lg">
+          <div className="flex items-center gap-2 text-xs text-teal-300 font-bold">
+            <CheckCircle2 className="w-4 h-4 text-teal-400" />
+            <span>{selectedCritIds.size} معیار برای عملیات دسته‌ای انتخاب شده‌اند</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExecuteBulkDelete}
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>حذف گروهی ({selectedCritIds.size} معیار)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedCritIds(new Set())}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              لغو انتخاب‌ها
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Table List */}
       <div className="bg-slate-800/20 border border-slate-800/80 rounded-2xl overflow-hidden">
@@ -514,6 +650,15 @@ export default function CriteriaBank({
             <table className="w-full text-xs text-slate-300">
               <thead>
                 <tr className="sticky top-16 z-20 bg-slate-900 border-b border-slate-800 text-slate-400 font-bold shadow-sm">
+                  <th className="p-4 text-center w-10">
+                    <input
+                      type="checkbox"
+                      checked={filteredCriteria.length > 0 && selectedCritIds.size === filteredCriteria.length}
+                      onChange={handleToggleSelectAll}
+                      className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer"
+                      title="انتخاب همه معیارهای فیلترشده"
+                    />
+                  </th>
                   <th className="p-4 text-right w-20">کد</th>
                   <th className="p-4 text-right w-36">دسته معیار</th>
                   <th className="p-4 text-right">عنوان شاخص و تعریف عملیاتی</th>
@@ -527,6 +672,14 @@ export default function CriteriaBank({
                   const effectiveSource = c.scoringSource || (c.cat === 'K' ? 'mis' : c.code.startsWith('B-01') ? 'kasra' : 'supervisor');
                   return (
                     <tr key={c.id} className="hover:bg-slate-800/10 transition-colors">
+                      <td className="p-4 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedCritIds.has(c.id)}
+                          onChange={(e) => handleToggleSelect(c.id, e)}
+                          className="rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-0 cursor-pointer"
+                        />
+                      </td>
                       <td className="p-4 font-mono font-bold text-teal-400 text-sm">{c.code}</td>
                       <td className="p-4">
                         <span className={`px-2.5 py-1 rounded text-[10px] font-bold ${
@@ -592,6 +745,14 @@ export default function CriteriaBank({
                               <span>سامانه کسری (خودکار)</span>
                             </span>
                             <span className="text-[9px] text-slate-400">حضور و غیاب</span>
+                          </div>
+                        ) : effectiveSource === 'multi_source' ? (
+                          <div className="inline-flex flex-col items-center gap-1">
+                            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-teal-500/20 text-teal-300 border border-teal-500/30 flex items-center gap-1">
+                              <GitFork className="w-3 h-3" />
+                              <span>چندمنبعی (ترکیبی)</span>
+                            </span>
+                            <span className="text-[9px] text-slate-400">MIS + کسری + سرپرست</span>
                           </div>
                         ) : effectiveSource === 'system' ? (
                           <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
@@ -939,7 +1100,41 @@ export default function CriteriaBank({
                       </div>
                     </div>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormScoringSource('multi_source');
+                      if (!formSource) setFormSource('تلفیقی چندمنبعی (MIS + کسری + سرپرست)');
+                    }}
+                    className={`p-3 rounded-xl border text-right transition-all flex items-start gap-2.5 cursor-pointer ${
+                      formScoringSource === 'multi_source'
+                        ? 'bg-teal-500/10 border-teal-500 text-teal-200 ring-2 ring-teal-500/20'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <GitFork className="w-5 h-5 text-teal-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="text-xs font-bold text-slate-100">تلفیقی چندمنبعی (Multi-Source)</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
+                        تامین نمره از چند مرجع (مثلاً ۵۰٪ فایل MIS تولید + ۲۵٪ فایل کسری + ۲۵٪ سرپرست)
+                      </div>
+                    </div>
+                  </button>
                 </div>
+
+                {/* Sub-parameters for Multi-Source */}
+                {formScoringSource === 'multi_source' && (
+                  <div className="p-3 bg-teal-950/30 border border-teal-800/40 rounded-xl space-y-2 mt-2">
+                    <div className="flex items-center gap-2 text-[11px] font-bold text-teal-300">
+                      <GitFork className="w-4 h-4 text-teal-400" />
+                      <span>پیکربندی سهم منابع تامین داده</span>
+                    </div>
+                    <p className="text-[10px] text-slate-300 leading-relaxed">
+                      در هنگام ورود داده‌ها از فایل‌های اکسل MIS، فایل‌های حضور و غیاب کسری و ثبت امتیاز سرپرست، نمره نهایی شاخص به صورت خودکار و وزنی از ترکیب ورودی‌های این مراجع محاسبه و تجمیع می‌شود.
+                    </p>
+                  </div>
+                )}
 
                 {/* Sub-parameters for MIS */}
                 {formScoringSource === 'mis' && (
@@ -1143,6 +1338,60 @@ export default function CriteriaBank({
         document.body
       )}
 
+      {/* Bulk Delete Criteria Confirmation Modal */}
+      {isBulkDeleteModalOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[99999] flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl text-right animate-in fade-in my-auto" dir="rtl">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-100">تایید حذف گروهی شاخص‌ها</h3>
+                <p className="text-[11px] text-slate-400">حذف همزمان {selectedCritIds.size} شاخص انتخاب‌شده</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/60 p-3.5 rounded-2xl border border-slate-800/80 space-y-2 text-xs max-h-48 overflow-y-auto">
+              <div className="text-slate-400 font-medium mb-1">شاخص‌های انتخاب‌شده برای حذف:</div>
+              {Array.from(selectedCritIds).map(id => {
+                const c = criteria.find(item => item.id === id);
+                return (
+                  <div key={id} className="flex justify-between items-center py-1 border-b border-slate-900 text-slate-200 text-xs">
+                    <span>{c?.name || 'شاخص'}</span>
+                    <span className="font-mono text-teal-400 text-[11px]">{c?.code}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-xs text-rose-300 leading-relaxed">
+              <p className="font-bold text-rose-200 mb-0.5">هشدار یکپارچگی داده‌ها:</p>
+              <p>این شاخص‌ها به طور کامل از بانک شاخص‌ها حذف شده و رفرنس آن‌ها در پروفایل‌های شغلی و فرم‌های ارزیابی مرتبط نیز پاکسازی خواهد شد.</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 transition-all cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-600/20 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>تایید و حذف گروهی ({selectedCritIds.size} مورد)</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
       {/* KPI Formula Engine Modal */}
       <KpiFormulaEngineModal
         isOpen={isFormulaModalOpen}
@@ -1154,6 +1403,15 @@ export default function CriteriaBank({
         profiles={profiles || []}
         evaluations={evaluations || []}
         onUpdateEvaluations={onUpdateEvaluations || (() => {})}
+        theme={theme}
+      />
+
+      {/* Multi-Source Criteria Bulk Import Modal */}
+      <MultiSourceCriteriaImportModal
+        isOpen={isMultiSourceModalOpen}
+        onClose={() => setIsMultiSourceModalOpen(false)}
+        existingCriteria={criteria}
+        onCommitMerge={handleCommitMultiSource}
         theme={theme}
       />
     </div>

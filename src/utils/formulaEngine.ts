@@ -254,3 +254,76 @@ export function calculateKpiScore(
     summaryText: `${formulaDesc} | نمره ارزیابی: ${score} از ۵ (${statusLabel})`
   };
 }
+
+/**
+ * Calculates composite score for criteria supplied from multiple sources
+ * e.g. MIS (50%) + Kasra (25%) + Supervisor (25%)
+ */
+export function calculateMultiSourceCompositeScore(
+  criterion: Criterion,
+  breakdown: {
+    misScore?: number;
+    kasraScore?: number;
+    supervisorScore?: number;
+    systemScore?: number;
+  }
+): { score: number; docText: string; effectivePercentage: number } {
+  const config = criterion.multiSourceConfig;
+  if (!config || !config.items || config.items.length === 0) {
+    const available = [
+      breakdown.misScore,
+      breakdown.kasraScore,
+      breakdown.supervisorScore,
+      breakdown.systemScore
+    ].filter((s): s is number => s !== undefined && s > 0);
+    if (available.length === 0) return { score: 0, docText: '', effectivePercentage: 0 };
+    const avg = available.reduce((a, b) => a + b, 0) / available.length;
+    const rounded = Math.round(avg * 10) / 10;
+    return {
+      score: rounded,
+      docText: `میانگین ترکیبی منابع: ${rounded}`,
+      effectivePercentage: 100
+    };
+  }
+
+  let totalWeightedScore = 0;
+  let totalAppliedWeight = 0;
+  const partsSummary: string[] = [];
+
+  config.items.forEach(item => {
+    let sourceScore: number | undefined = undefined;
+    let sourceName = item.label || '';
+    if (item.source === 'mis') {
+      sourceScore = breakdown.misScore;
+      if (!sourceName) sourceName = 'سامانه تولید MIS';
+    } else if (item.source === 'kasra') {
+      sourceScore = breakdown.kasraScore;
+      if (!sourceName) sourceName = 'حضور و غیاب کسری';
+    } else if (item.source === 'supervisor') {
+      sourceScore = breakdown.supervisorScore;
+      if (!sourceName) sourceName = 'ارزیابی سرپرست';
+    } else if (item.source === 'system') {
+      sourceScore = breakdown.systemScore;
+      if (!sourceName) sourceName = 'فرمول سیستمی';
+    }
+
+    if (sourceScore !== undefined && sourceScore > 0) {
+      totalWeightedScore += sourceScore * item.weightPercent;
+      totalAppliedWeight += item.weightPercent;
+      partsSummary.push(`${sourceName} (${item.weightPercent}٪): ${sourceScore}`);
+    } else {
+      partsSummary.push(`${sourceName} (${item.weightPercent}٪): در انتظار`);
+    }
+  });
+
+  if (totalAppliedWeight === 0) {
+    return { score: 0, docText: 'در انتظار ورود داده از منابع مربوطه', effectivePercentage: 0 };
+  }
+
+  const finalScore = Math.round((totalWeightedScore / totalAppliedWeight) * 10) / 10;
+  return {
+    score: Math.min(5, Math.max(1, finalScore)),
+    docText: partsSummary.join(' | '),
+    effectivePercentage: totalAppliedWeight
+  };
+}

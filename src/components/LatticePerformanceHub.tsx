@@ -44,6 +44,7 @@ import {
   INITIAL_KUDOS, 
   INITIAL_PULSE_METRICS 
 } from '../data/latticeKickidlerSeed';
+import { db } from '../utils/db';
 
 interface LatticePerformanceHubProps {
   currentUser: Employee;
@@ -59,15 +60,8 @@ export default function LatticePerformanceHub({
 }: LatticePerformanceHubProps) {
   const [activeSubTab, setActiveSubTab] = useState<'okrs' | 'one_on_ones' | 'praise' | 'pulse'>('okrs');
 
-  // Persistence for OKRs
-  const [okrs, setOkrs] = useState<OKRGoal[]>(() => {
-    try {
-      const saved = localStorage.getItem('pe_lattice_okrs');
-      return saved ? JSON.parse(saved) : INITIAL_OKRS;
-    } catch {
-      return INITIAL_OKRS;
-    }
-  });
+  // Persistence for OKRs with real-time db sync
+  const [okrs, setOkrs] = useState<OKRGoal[]>(() => db.getOkrs());
 
   // Persistence for 1-on-1s
   const [oneOnOnes, setOneOnOnes] = useState<OneOnOneMeeting[]>(() => {
@@ -99,9 +93,22 @@ export default function LatticePerformanceHub({
     }
   });
 
-  // Save changes to localStorage
+  // Real-time synchronization across app tabs and edit forms
   useEffect(() => {
-    localStorage.setItem('pe_lattice_okrs', JSON.stringify(okrs));
+    const unsub = db.subscribe((key, data) => {
+      if (key === 'pe_lattice_okrs' && Array.isArray(data)) {
+        setOkrs(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+          return data;
+        });
+      }
+    });
+    return unsub;
+  }, []);
+
+  // Save changes to db and dispatch notifications
+  useEffect(() => {
+    db.saveOkrs(okrs);
   }, [okrs]);
 
   useEffect(() => {
@@ -219,21 +226,94 @@ export default function LatticePerformanceHub({
       confidence: overallConf
     };
 
-    const nextOkrs = okrs.map(g => g.id === finalUpdated.id ? finalUpdated : g);
-    setOkrs(nextOkrs);
-    try {
-      localStorage.setItem('pe_lattice_okrs', JSON.stringify(nextOkrs));
-    } catch {}
+    setOkrs(prev => {
+      const nextOkrs = prev.map(g => g.id === finalUpdated.id ? finalUpdated : g);
+      db.saveOkrs(nextOkrs);
+      return nextOkrs;
+    });
     setEditingOkr(null);
   };
 
   const handleDeleteOkr = (goalId: string) => {
-    const nextOkrs = okrs.filter(g => g.id !== goalId);
-    setOkrs(nextOkrs);
-    try {
-      localStorage.setItem('pe_lattice_okrs', JSON.stringify(nextOkrs));
-    } catch {}
+    setOkrs(prev => {
+      const nextOkrs = prev.filter(g => g.id !== goalId);
+      db.saveOkrs(nextOkrs);
+      return nextOkrs;
+    });
     setDeletingOkr(null);
+  };
+
+  // 1-on-1 Edit & Delete states
+  const [editing1on1, setEditing1on1] = useState<OneOnOneMeeting | null>(null);
+  const [deleting1on1, setDeleting1on1] = useState<OneOnOneMeeting | null>(null);
+
+  // Kudos Edit & Delete states
+  const [editingKudos, setEditingKudos] = useState<PraiseKudos | null>(null);
+  const [deletingKudos, setDeletingKudos] = useState<PraiseKudos | null>(null);
+
+  // Save edited 1-on-1
+  const handleSaveEdited1on1 = (updated: OneOnOneMeeting) => {
+    const nextList = oneOnOnes.map(m => m.id === updated.id ? updated : m);
+    setOneOnOnes(nextList);
+    try {
+      localStorage.setItem('pe_lattice_one_on_ones', JSON.stringify(nextList));
+    } catch {}
+    setEditing1on1(null);
+  };
+
+  // Delete 1-on-1
+  const handleDelete1on1 = (meetingId: string) => {
+    const nextList = oneOnOnes.filter(m => m.id !== meetingId);
+    setOneOnOnes(nextList);
+    try {
+      localStorage.setItem('pe_lattice_one_on_ones', JSON.stringify(nextList));
+    } catch {}
+    if (selected1on1Id === meetingId) {
+      setSelected1on1Id(nextList[0]?.id || null);
+    }
+    setDeleting1on1(null);
+  };
+
+  // Delete Talking Point
+  const handleDeleteTalkingPoint = (meetingId: string, pointId: string) => {
+    setOneOnOnes(prev => prev.map(m => {
+      if (m.id !== meetingId) return m;
+      return {
+        ...m,
+        talkingPoints: m.talkingPoints.filter(tp => tp.id !== pointId)
+      };
+    }));
+  };
+
+  // Delete Action Item
+  const handleDeleteActionItem = (meetingId: string, itemId: string) => {
+    setOneOnOnes(prev => prev.map(m => {
+      if (m.id !== meetingId) return m;
+      return {
+        ...m,
+        actionItems: m.actionItems.filter(ai => ai.id !== itemId)
+      };
+    }));
+  };
+
+  // Save edited Kudos
+  const handleSaveEditedKudos = (updated: PraiseKudos) => {
+    const nextList = kudosList.map(k => k.id === updated.id ? updated : k);
+    setKudosList(nextList);
+    try {
+      localStorage.setItem('pe_lattice_kudos', JSON.stringify(nextList));
+    } catch {}
+    setEditingKudos(null);
+  };
+
+  // Delete Kudos
+  const handleDeleteKudos = (kudosId: string) => {
+    const nextList = kudosList.filter(k => k.id !== kudosId);
+    setKudosList(nextList);
+    try {
+      localStorage.setItem('pe_lattice_kudos', JSON.stringify(nextList));
+    } catch {}
+    setDeletingKudos(null);
   };
 
   // Toggle Talking Point in 1-on-1
@@ -375,7 +455,11 @@ export default function LatticePerformanceHub({
       dueDate: newOkrDueDate || '۱۴۰۵/۰۶/۳۱'
     };
 
-    setOkrs([newGoal, ...okrs]);
+    setOkrs(prev => {
+      const next = [newGoal, ...prev];
+      db.saveOkrs(next);
+      return next;
+    });
     setIsNewOkrModalOpen(false);
     setNewOkrTitle('');
     setNewOkrDescription('');
@@ -849,14 +933,47 @@ export default function LatticePerformanceHub({
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>شاخص روحیه جلسه:</span>
-                  <div className="flex items-center gap-1 text-amber-500 text-sm">
-                    {[1, 2, 3, 4, 5].map(star => (
-                      <span key={star} className={star <= (activeMeeting.moodRating || 4) ? 'opacity-100' : 'opacity-25'}>
-                        ★
-                      </span>
-                    ))}
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>شاخص روحیه:</span>
+                    <div className="flex items-center gap-1 text-amber-500 text-sm">
+                      {[1, 2, 3, 4, 5].map(star => (
+                        <span key={star} className={star <= (activeMeeting.moodRating || 4) ? 'opacity-100' : 'opacity-25'}>
+                          ★
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Actions for 1-on-1 meeting: Edit and Delete */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setEditing1on1(JSON.parse(JSON.stringify(activeMeeting)))}
+                      className={`p-2 rounded-xl border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                        theme === 'dark' 
+                          ? 'bg-slate-800/80 hover:bg-indigo-900/40 border-slate-700 text-indigo-300' 
+                          : 'bg-indigo-50 hover:bg-indigo-100 border-indigo-200 text-indigo-700'
+                      }`}
+                      title="ویرایش مشخصات جلسه 1-on-1"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">ویرایش</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDeleting1on1(activeMeeting)}
+                      className={`p-2 rounded-xl border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                        theme === 'dark' 
+                          ? 'bg-slate-800/80 hover:bg-rose-900/40 border-slate-700 text-rose-400' 
+                          : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                      }`}
+                      title="حذف جلسه"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">حذف</span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -875,8 +992,7 @@ export default function LatticePerformanceHub({
                   {activeMeeting.talkingPoints.map(tp => (
                     <div 
                       key={tp.id}
-                      onClick={() => handleToggleTalkingPoint(activeMeeting.id, tp.id)}
-                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all ${
                         tp.isCompleted 
                           ? theme === 'dark'
                             ? 'bg-emerald-950/20 border-emerald-800/40 text-slate-400 line-through' 
@@ -886,7 +1002,10 @@ export default function LatticePerformanceHub({
                             : 'bg-slate-50 border-slate-200 text-slate-800 hover:border-indigo-300'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5">
+                      <div 
+                        onClick={() => handleToggleTalkingPoint(activeMeeting.id, tp.id)}
+                        className="flex items-center gap-2.5 flex-1 cursor-pointer"
+                      >
                         <div className={`w-4 h-4 rounded-md border flex items-center justify-center ${
                           tp.isCompleted ? 'bg-emerald-600 border-emerald-500 text-white' : 'border-slate-400 dark:border-slate-600'
                         }`}>
@@ -895,9 +1014,22 @@ export default function LatticePerformanceHub({
                         <span className="text-xs font-medium">{tp.text}</span>
                       </div>
 
-                      <span className={`text-[10px] font-medium ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                        افزوده شده توسط: {tp.addedBy === 'supervisor' ? 'سرپرست' : 'همکار'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-medium ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                          افزوده شده توسط: {tp.addedBy === 'supervisor' ? 'سرپرست' : 'همکار'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteTalkingPoint(activeMeeting.id, tp.id);
+                          }}
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                          title="حذف موضوع گفت‌وگو"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -935,8 +1067,7 @@ export default function LatticePerformanceHub({
                   {activeMeeting.actionItems.map(ai => (
                     <div 
                       key={ai.id}
-                      onClick={() => handleToggleActionItem(activeMeeting.id, ai.id)}
-                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all ${
                         ai.isDone 
                           ? theme === 'dark'
                             ? 'bg-teal-950/20 border-teal-800/40 text-slate-400 line-through' 
@@ -946,7 +1077,10 @@ export default function LatticePerformanceHub({
                             : 'bg-slate-50 border-slate-200 text-slate-800 hover:border-teal-300'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5">
+                      <div 
+                        onClick={() => handleToggleActionItem(activeMeeting.id, ai.id)}
+                        className="flex items-center gap-2.5 flex-1 cursor-pointer"
+                      >
                         <div className={`w-4 h-4 rounded-md border flex items-center justify-center ${
                           ai.isDone ? 'bg-teal-600 border-teal-500 text-white' : 'border-slate-400 dark:border-slate-600'
                         }`}>
@@ -955,10 +1089,23 @@ export default function LatticePerformanceHub({
                         <span className="text-xs font-medium">{ai.title}</span>
                       </div>
 
-                      <div className={`text-[10px] flex items-center gap-2 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                        <span>مسئول: <strong className={theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}>{ai.assigneeName}</strong></span>
-                        <span>•</span>
-                        <span className="font-mono">موعد: {ai.dueDate}</span>
+                      <div className="flex items-center gap-3">
+                        <div className={`text-[10px] flex items-center gap-2 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                          <span>مسئول: <strong className={theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}>{ai.assigneeName}</strong></span>
+                          <span>•</span>
+                          <span className="font-mono">موعد: {ai.dueDate}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteActionItem(activeMeeting.id, ai.id);
+                          }}
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                          title="حذف اقدام"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -1059,9 +1206,35 @@ export default function LatticePerformanceHub({
                       </div>
                     </div>
 
-                    <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-0.5 rounded-full whitespace-nowrap">
-                      {kudos.companyValue}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-0.5 rounded-full whitespace-nowrap">
+                        {kudos.companyValue}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setEditingKudos(JSON.parse(JSON.stringify(kudos)))}
+                        className={`p-1.5 rounded-lg border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                          theme === 'dark' 
+                            ? 'bg-slate-800/80 hover:bg-pink-900/40 border-slate-700 text-pink-300' 
+                            : 'bg-pink-50 hover:bg-pink-100 border-pink-200 text-pink-700'
+                        }`}
+                        title="ویرایش تمجید"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeletingKudos(kudos)}
+                        className={`p-1.5 rounded-lg border text-xs font-bold flex items-center gap-1 cursor-pointer transition ${
+                          theme === 'dark' 
+                            ? 'bg-slate-800/80 hover:bg-rose-900/40 border-slate-700 text-rose-400' 
+                            : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                        }`}
+                        title="حذف تمجید"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
 
                   <p className={`text-xs leading-relaxed font-medium p-3 rounded-xl border ${
@@ -1881,6 +2054,355 @@ export default function LatticePerformanceHub({
                 className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-600/20 cursor-pointer"
               >
                 <Save className="w-4 h-4" /> ذخیره تغییرات OKR
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* EDIT 1-ON-1 MODAL */}
+      {editing1on1 && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className={`relative w-full max-w-lg rounded-2xl border p-6 shadow-2xl space-y-4 my-auto max-h-[90vh] overflow-y-auto ${
+            theme === 'dark' ? 'bg-slate-900 border-indigo-500/30 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
+          }`}>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-indigo-400">
+                <Edit2 className="w-5 h-5" />
+                <h3 className="text-base font-bold">ویرایش جلسه کوچینگ و گفت‌وگو (1-on-1)</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditing1on1(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold mb-1">طرف گفت‌وگو (همکار شاغل):</label>
+                <select
+                  value={editing1on1.empId}
+                  onChange={e => {
+                    const emp = employees.find(emp => emp.id === e.target.value);
+                    setEditing1on1({
+                      ...editing1on1,
+                      empId: e.target.value,
+                      empName: emp ? emp.name : editing1on1.empName
+                    });
+                  }}
+                  className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-indigo-500 ${
+                    theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                >
+                  {employees.map(emp => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name} ({emp.unit})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold mb-1">سرپرست مستقیم:</label>
+                  <input
+                    type="text"
+                    value={editing1on1.supervisorName}
+                    onChange={e => setEditing1on1({ ...editing1on1, supervisorName: e.target.value })}
+                    className={`w-full border rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-indigo-500 ${
+                      theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">تاریخ و ساعت برگزاری:</label>
+                  <input
+                    type="text"
+                    value={editing1on1.scheduledDate}
+                    onChange={e => setEditing1on1({ ...editing1on1, scheduledDate: e.target.value })}
+                    className={`w-full border rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-indigo-500 ${
+                      theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold mb-1">وضعیت برگزاری:</label>
+                  <select
+                    value={editing1on1.status}
+                    onChange={e => setEditing1on1({ ...editing1on1, status: e.target.value as any })}
+                    className={`w-full border rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-indigo-500 ${
+                      theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  >
+                    <option value="scheduled">برنامه‌ریزی شده</option>
+                    <option value="completed">برگزار شد</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold mb-1">شاخص روحیه جلسه (۱ تا ۵):</label>
+                  <select
+                    value={editing1on1.moodRating || 4}
+                    onChange={e => setEditing1on1({ ...editing1on1, moodRating: Number(e.target.value) })}
+                    className={`w-full border rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-indigo-500 ${
+                      theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  >
+                    <option value={1}>۱ ستاره (نیاز به پیگیری شدید)</option>
+                    <option value={2}>۲ ستاره (کم‌انرژی)</option>
+                    <option value={3}>۳ ستاره (معمولی)</option>
+                    <option value={4}>۴ ستاره (خوب و سازنده)</option>
+                    <option value={5}>۵ ستاره (عالی و بسیار پرانرژی)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">یادداشت‌های محرمانه مربیگری سرپرست:</label>
+                <textarea
+                  rows={3}
+                  value={editing1on1.privateSupervisorNotes || ''}
+                  onChange={e => setEditing1on1({ ...editing1on1, privateSupervisorNotes: e.target.value })}
+                  placeholder="نکات مربیگری و تحلیل رفتار همکار..."
+                  className={`w-full border rounded-xl p-3 text-xs focus:outline-none focus:border-indigo-500 leading-relaxed ${
+                    theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditing1on1(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveEdited1on1(editing1on1)}
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-600/20 cursor-pointer"
+              >
+                <Save className="w-4 h-4" /> ذخیره تغییرات جلسه
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* DELETE 1-ON-1 MODAL */}
+      {deleting1on1 && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 text-right my-auto">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2.5 bg-rose-500/10 rounded-xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100">حذف جلسه کوچینگ (1-on-1)</h3>
+                <p className="text-xs text-slate-400">{deleting1on1.scheduledDate}</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed">
+              آیا از حذف جلسه گفت‌وگوی دونفره با همکار <span className="font-bold text-white">«{deleting1on1.empName}»</span> و کلیه اقدامات ثبت‌شده در آن اطمینان دارید؟
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleting1on1(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDelete1on1(deleting1on1.id)}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-rose-600/20 cursor-pointer"
+              >
+                تایید و حذف قطعی
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* EDIT KUDOS MODAL */}
+      {editingKudos && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className={`relative w-full max-w-lg rounded-2xl border p-6 shadow-2xl space-y-4 my-auto max-h-[90vh] overflow-y-auto ${
+            theme === 'dark' ? 'bg-slate-900 border-pink-500/30 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
+          }`}>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-pink-400">
+                <Heart className="w-5 h-5 fill-current" />
+                <h3 className="text-base font-bold">ویرایش پیام تقدیر و تمجید (Kudos)</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingKudos(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold mb-1">همکار دریافت‌کننده:</label>
+                <select
+                  value={editingKudos.receiverId}
+                  onChange={e => {
+                    const emp = employees.find(emp => emp.id === e.target.value);
+                    setEditingKudos({
+                      ...editingKudos,
+                      receiverId: e.target.value,
+                      receiverName: emp ? emp.name : editingKudos.receiverName
+                    });
+                  }}
+                  className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-pink-500 ${
+                    theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                >
+                  {employees.map(emp => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name} ({emp.unit})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">نام فرستنده:</label>
+                <input
+                  type="text"
+                  value={editingKudos.senderName}
+                  onChange={e => setEditingKudos({ ...editingKudos, senderName: e.target.value })}
+                  className={`w-full border rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-pink-500 ${
+                    theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">ارزش سازمانی منطبق:</label>
+                <select
+                  value={editingKudos.companyValue}
+                  onChange={e => setEditingKudos({ ...editingKudos, companyValue: e.target.value as any })}
+                  className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-pink-500 ${
+                    theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                >
+                  <option value="کیفیت برتر">کیفیت برتر و دقت فنی</option>
+                  <option value="کار تیمی و همدلی">کار تیمی و همدلی</option>
+                  <option value="تعهد به ایمنی و HSE">تعهد به ایمنی و بهداشت (HSE)</option>
+                  <option value="نوآوری و خلاقیت فنی">نوآوری و خلاقیت فنی</option>
+                  <option value="مسئولیت‌پذیری و انضباط">مسئولیت‌پذیری و انضباط</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">انتخاب نشان نمادین (Badge Icon):</label>
+                <div className="flex gap-2">
+                  {['👏', '🏆', '🚀', '⭐', '🤝', '💡', '🛡️'].map(badge => (
+                    <button
+                      type="button"
+                      key={badge}
+                      onClick={() => setEditingKudos({ ...editingKudos, badgeIcon: badge })}
+                      className={`w-10 h-10 rounded-xl text-lg flex items-center justify-center transition-all cursor-pointer ${
+                        editingKudos.badgeIcon === badge 
+                          ? 'bg-pink-600 text-white scale-110 shadow-md' 
+                          : theme === 'dark' ? 'bg-slate-950 border border-slate-800' : 'bg-slate-100 border border-slate-300'
+                      }`}
+                    >
+                      {badge}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold mb-1">متن پیام تقدیر و تشکر:</label>
+                <textarea
+                  required
+                  rows={3}
+                  value={editingKudos.message}
+                  onChange={e => setEditingKudos({ ...editingKudos, message: e.target.value })}
+                  className={`w-full border rounded-xl p-3 text-xs focus:outline-none focus:border-pink-500 leading-relaxed ${
+                    theme === 'dark' ? 'bg-slate-950 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingKudos(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveEditedKudos(editingKudos)}
+                className="px-5 py-2 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-pink-600/20 cursor-pointer"
+              >
+                <Save className="w-4 h-4" /> ذخیره تغییرات تمجید
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* DELETE KUDOS MODAL */}
+      {deletingKudos && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+          <div className="bg-slate-900 border border-rose-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 text-right my-auto">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2.5 bg-rose-500/10 rounded-xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100">حذف پیام تمجید و قدردانی</h3>
+                <p className="text-xs text-slate-400">ارزش سازمانی: {deletingKudos.companyValue}</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed">
+              آیا از حذف پیام قدردانی از <span className="font-bold text-white">«{deletingKudos.senderName}»</span> به <span className="font-bold text-white">«{deletingKudos.receiverName}»</span> با متن:
+            </p>
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 text-xs text-slate-300 italic">
+              «{deletingKudos.message}»
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingKudos(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteKudos(deletingKudos.id)}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-rose-600/20 cursor-pointer"
+              >
+                تایید و حذف قطعی
               </button>
             </div>
           </div>

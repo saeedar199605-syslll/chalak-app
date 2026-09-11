@@ -30,7 +30,20 @@ export type CriterionScoringSource =
   | 'supervisor' // ارزیابی و امتیازدهی مستقیم سرپرست کارگاه / مدیر مستقیم
   | 'mis'        // ورود خودکار داده‌ها از سامانه تولید و کیفیت MIS/MES
   | 'kasra'      // ورود خودکار داده‌ها از سامانه حضور و غیاب کسری
-  | 'system';    // محاسبه خودکار سیستمی با موتور فرمول‌ساز KPI
+  | 'system'     // محاسبه خودکار سیستمی با موتور فرمول‌ساز KPI
+  | 'multi_source'; // تامین ترکیبی از چند منبع (مانند MIS + کسری + سرپرست)
+
+export interface MultiSourceItemConfig {
+  source: 'supervisor' | 'mis' | 'kasra' | 'system';
+  weightPercent: number; // e.g. 50 (for 50%)
+  misMetricKey?: MisMetricKey;
+  label?: string; // e.g. "تولید و راندمان MIS", "انضباط و تردد کسری", "کیفیت و سرپرست"
+}
+
+export interface MultiSourceConfig {
+  items: MultiSourceItemConfig[];
+  aggregationMode?: 'weighted_average' | 'sum' | 'min' | 'max';
+}
 
 export type MisMetricKey = 
   | 'efficiency'         // راندمان خط و تحقق برنامه زمان‌بندی تولید
@@ -52,17 +65,19 @@ export interface Criterion {
   source?: string;
   method?: string;
   dir?: 'more' | 'less'; // 'more' = higher is better, 'less' = lower is better
-  scoringSource?: CriterionScoringSource; // مشخص‌کننده منبع ورود نمره (سرپرست یا MIS یا کسری)
+  scoringSource?: CriterionScoringSource; // مشخص‌کننده منبع ورود نمره (سرپرست یا MIS یا کسری یا چندمنبعی)
   misMetricKey?: MisMetricKey;            // کلید متریک متناظر در سامانه MIS
   customMetricField?: string;             // نام فیلد در فایل اکسل در صورت سفارشی بودن
   autoPopulate?: boolean;                 // اعمال خودکار نمره هنگام آپلود اکسل
   misTargetValue?: number;                // هدف عددی تعیین‌شده برای شاخص
+  multiSourceConfig?: MultiSourceConfig;  // پیکربندی ترکیب منابع تامین داده
   calculationType?: KpiCalculationType;
   formulaExpression?: string;
   variables?: KpiVariableDefinition[];
   unit?: string;
   targetValue?: number;
   scoreThresholds?: KpiScoreThresholds;
+  department?: string; // بخش یا واحد سازمانی تأمین‌کننده شاخص (مانند تولید، کنترل کیفیت، HSE)
 }
 
 export interface ProfileItem {
@@ -164,6 +179,16 @@ export interface GrievanceAppeal {
   adjustedScoreDelta?: number;
 }
 
+export interface ScoreSourceBreakdown {
+  misScore?: number;
+  misMetricValue?: number | string;
+  kasraScore?: number;
+  kasraMetricValue?: number | string;
+  supervisorScore?: number;
+  systemScore?: number;
+  updatedAt?: string;
+}
+
 export interface ScoreItem {
   cid: string;
   weight: number;
@@ -171,12 +196,13 @@ export interface ScoreItem {
   self: number;  // 1 to 5, or 0 if unrated (Employee)
   peer?: number; // 1 to 5, or 0 if unrated (Peer/360)
   doc?: string;  // Supporting document / justification
-  sourceType?: 'supervisor' | 'mis' | 'kasra' | 'system' | 'auto'; // منبع ثبت نمره فعلی
+  sourceType?: 'supervisor' | 'mis' | 'kasra' | 'system' | 'multi_source' | 'auto'; // منبع ثبت نمره فعلی
   autoPopulated?: boolean; // آیا از اکسل MIS یا کسری به صورت خودکار نشانده شده
   rawMetricValue?: number | string; // مقدار خام ورودی مانند راندمان ۹۵٪ یا تاخیر ۳۰ دقیقه
   rawMetricLabel?: string; // برچسب متریک مانند "راندمان خط"
   overrideNote?: string; // توضیح سرپرست در صورت تغییر دستی نمره خودکار
   overrideBy?: string;   // نام کاربری که تغییر را انجام داده
+  sourceBreakdown?: ScoreSourceBreakdown; // تفکیک نمرات چند منبعی (MIS، کسری، سرپرست)
 }
 
 export interface UserCustomPermission {
