@@ -11,6 +11,7 @@ import Employees from './components/Employees';
 import Evaluations from './components/Evaluations';
 import Calibration from './components/Calibration';
 import Reports from './components/Reports';
+import SupportTickets from './components/SupportTickets';
 import Login from './components/Login';
 import Onboarding from './components/Onboarding';
 import MyEvaluation from './components/MyEvaluation';
@@ -20,7 +21,7 @@ import SupervisorNotificationBell from './components/SupervisorNotificationBell'
 import LatticePerformanceHub from './components/LatticePerformanceHub';
 import KickidlerProductivityHub from './components/KickidlerProductivityHub';
 import ComprehensiveManualModal from './components/ComprehensiveManualModal';
-import {
+import { UploadCloud,  
    Home,
    BookOpen,
    Sun,
@@ -46,11 +47,11 @@ import {
   Bell,
   BellOff
 } from 'lucide-react';
-import { Criterion, JobProfile, Employee, Evaluation } from './types';
-import { SEED_CRITERIA, SEED_PROFILES, SEED_EMPLOYEES, SEED_EVALUATIONS } from './seedData';
-import { browserNotifications } from './utils/browserNotifications';
-import { db } from './utils/db';
-import { 
+import {  Criterion, JobProfile, Employee, Evaluation } from './types';
+import {  SEED_CRITERIA, SEED_PROFILES, SEED_EMPLOYEES, SEED_EVALUATIONS } from './seedData';
+import {  browserNotifications } from './utils/browserNotifications';
+import {  db } from './utils/db';
+import {  
   validateEmployeeInput, 
   validateCriterionInput, 
   validateJobProfileInput, 
@@ -410,6 +411,11 @@ export default function App() {
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
+    // DO NOT intercept right-clicks on inputs or textareas so native copy/paste works!
+    const target = e.target as HTMLElement;
+    if (target.tagName.toLowerCase() === 'input' || target.tagName.toLowerCase() === 'textarea' || target.isContentEditable) {
+      return; // allow native menu
+    }
     e.preventDefault();
     const menuWidth = 280;
     const menuHeight = 440;
@@ -836,9 +842,10 @@ export default function App() {
               currentUser={currentUser}
             />
           )}
-          {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onBulkUpdateEmployees={handleBulkUpdateEmployees} onDeleteEmployee={handleDeleteEmployee} onBulkDeleteEmployees={handleBulkDeleteEmployees} onStartEvaluation={handleStartEvaluationDirect} theme={theme} />}
+          {currentTab === 'employees' && <Employees employees={employees} profiles={profiles} evaluations={evaluations} onAddEmployee={handleAddEmployee} onUpdateEmployee={handleUpdateEmployee} onBulkUpdateEmployees={handleBulkUpdateEmployees} onDeleteEmployee={handleDeleteEmployee} onBulkDeleteEmployees={handleBulkDeleteEmployees} onStartEvaluation={handleStartEvaluationDirect} theme={theme} />}
           {currentTab === 'evaluations' && <Evaluations evaluations={evaluations} employees={employees} profiles={profiles} criteria={criteria} onAddEvaluation={handleAddEvaluation} onUpdateEvaluation={handleUpdateEvaluation} onBulkUpdateEvaluations={handleBulkUpdateEvaluations} onDeleteEvaluation={handleDeleteEvaluation} onBulkDeleteEvaluations={handleBulkDeleteEvaluations} activeEvalId={activeEvalId} onSetActiveEval={setActiveEvalId} currentUser={currentUser} />}
           {currentTab === 'calibration' && <Calibration evaluations={evaluations} employees={employees} profiles={profiles} onUpdateEvaluation={handleUpdateEvaluation} onSelectEvaluation={handleSelectEvaluation} />}
+          {currentTab === 'support' && <SupportTickets currentUser={currentUser} theme={theme} />}
           {currentTab === 'reports' && (
             <Reports 
               evaluations={evaluations} 
@@ -941,6 +948,10 @@ export default function App() {
               </button>
             )}
             <hr className={`my-1 ${theme === 'dark' ? 'border-slate-800' : 'border-slate-200'}`} />
+            <button type="button" onClick={() => { db.syncToCloudNow(); setContextMenu(null); notifyDataSaved(); }} className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-sky-500/10 hover:text-sky-400 transition-all cursor-pointer text-sky-400">
+              <div className="flex items-center gap-2"><UploadCloud className="w-3.5 h-3.5" /><span>همگام‌سازی ابری (Force Sync)</span></div>
+              <span className="text-[10px] text-sky-400 font-mono">Sync</span>
+            </button>
             <button type="button" onClick={handleQuickJSONBackup} className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-indigo-500/10 hover:text-indigo-400 transition-all cursor-pointer text-indigo-400">
               <div className="flex items-center gap-2"><Download className="w-3.5 h-3.5" /><span>بکاپ سریع (JSON)</span></div>
               <span className="text-[10px] text-indigo-400 font-mono">Backup</span>

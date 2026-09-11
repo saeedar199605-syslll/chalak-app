@@ -56,22 +56,6 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     );
   }
 
-  // State sync endpoint (in-memory or KV fallback)
-  if (path === 'state' || url.pathname === '/api/state') {
-    if (request.method === 'GET') {
-      return new Response(JSON.stringify({}), {
-        status: 200,
-        headers: corsHeaders,
-      });
-    }
-    if (request.method === 'POST') {
-      return new Response(JSON.stringify({ success: true, cloudflare: true }), {
-        status: 200,
-        headers: corsHeaders,
-      });
-    }
-  }
-
   // Gemini API Proxy endpoints
   if (path.startsWith('gemini/')) {
     const apiKey = env.GEMINI_API_KEY || '';

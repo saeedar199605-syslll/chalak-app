@@ -1,35 +1,64 @@
-export const onRequestPost: PagesFunction<{ GEMINI_API_KEY: string }> = async (context) => {
-  const { request, env } = context;
-  const apiKey = env.GEMINI_API_KEY;
+import { GoogleGenAI, Type } from '@google/genai';
 
-  if (!apiKey) {
-    return new Response(JSON.stringify({ error: "کلید API تعریف نشده است." }), { status: 500 });
-  }
-
+export const onRequestPost: any = async (context: any) => {
   try {
-    const body = await request.json();
-    const prompt = `ماتریس ۹ خانه‌ای استعداد (9-Box Talent Matrix) کارخانه را تحلیل کنید.
-دوره: ${body.period}
-کل پرسنل: ${body.totalHeadcount}
-توزیع در ماتریس:
-${JSON.stringify(body.boxesSummary)}`;
+    const { request, env } = context;
+    const body = await request.json() as any;
+    const { matrixData, employees } = body;
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
-      })
+    if (!env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
+    const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+    
+    const summaryData = matrixData.map((d: any) => ({
+      name: d.name,
+      role: d.jobFamily || d.role,
+      performance: d.performance,
+      potential: d.potential,
+      box: d.boxIndex
+    }));
+
+    const prompt = `
+      شما یک مشاور ارشد منابع انسانی (HR) هستید. 
+      داده‌های ماتریس ۹ گانه (9-Box Grid):
+      ${JSON.stringify(summaryData, null, 2)}
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            executiveSummary: { type: Type.STRING },
+            talentHealthScore: { type: Type.INTEGER },
+            boxRecommendations: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  boxId: { type: Type.STRING },
+                  boxTitle: { type: Type.STRING },
+                  headcount: { type: Type.INTEGER },
+                  strategicGuidance: { type: Type.STRING },
+                  individualCoachingTips: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  recommendedActions: { type: Type.ARRAY, items: { type: Type.STRING } }
+                },
+                required: ["boxId", "boxTitle", "strategicGuidance", "individualCoachingTips", "recommendedActions"]
+              }
+            },
+            successionAndRetention: { type: Type.ARRAY, items: { type: Type.STRING } },
+            riskInterventions: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["executiveSummary", "talentHealthScore", "boxRecommendations", "successionAndRetention", "riskInterventions"]
+        }
+      }
     });
 
-    const data = await response.json();
-    const textResult = data.candidates[0].content.parts[0].text;
-
-    return new Response(textResult, {
-      headers: { 'Content-Type': 'application/json' }
-    });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: "خطا در تحلیل ماتریس ۹-خانه" }), { status: 500 });
+    const parsed = JSON.parse(response.text || "{}");
+    return new Response(JSON.stringify(parsed), { headers: { 'Content-Type': 'application/json' } });
+  } catch (error: any) {
+    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
   }
 };

@@ -7,8 +7,7 @@
  */
 
 import React from 'react';
-import { 
-  LayoutDashboard, 
+import { LifeBuoy, LayoutDashboard, 
   FileSpreadsheet, 
   Briefcase, 
   Users, 
@@ -66,7 +65,12 @@ export default function Sidebar({
 }: SidebarProps) {
   
   // Streamlined and clear navigation groups
-  const menuGroups = [
+  const hasPerm = (perm: string) => currentUser.role === 'admin' || currentUser.permissions?.includes(perm);
+  
+  type MenuItem = { id: string, label: string, icon: any, roles?: string[], permission?: string };
+  type MenuGroup = { title: string, items: MenuItem[] };
+  
+  const menuGroups: MenuGroup[] = [
     {
       title: 'میز کار و ارزیابی',
       items: [
@@ -86,18 +90,24 @@ export default function Sidebar({
     {
       title: 'شایستگی‌ها و شاخص‌ها',
       items: [
-        { id: 'criteria', label: 'بانک شاخص‌ها و فرمول‌های KPI', icon: Calculator, roles: ['admin'] },
+        { id: 'criteria', label: 'بانک شاخص‌ها و فرمول‌های KPI', icon: Calculator, roles: ['admin', 'supervisor', 'employee'], permission: 'manage_criteria' },
         { id: 'profiles', label: 'پروفایل‌های شغلی', icon: Briefcase, roles: ['admin'] },
-        { id: 'employees', label: 'مدیریت کارکنان', icon: Users, roles: ['admin', 'supervisor'] },
+        { id: 'employees', label: 'مدیریت کارکنان', icon: Users, roles: ['admin', 'supervisor', 'employee'], permission: 'manage_users' },
       ]
     },
     {
       title: 'تحلیل، آموزش و تنظیمات',
       items: [
         { id: 'calibration', label: 'کالیبراسیون نمرات', icon: Scale, roles: ['admin'] },
-        { id: 'reports', label: 'تحلیل‌ها و ماتریس ۹-Box', icon: TrendingUp, roles: ['admin', 'supervisor'] },
+        { id: 'reports', label: 'تحلیل‌ها و ماتریس ۹-Box', icon: TrendingUp, roles: ['admin', 'supervisor', 'employee'], permission: 'view_all_reports' },
         { id: 'settings', label: 'مرکز مدیریت و امنیت', icon: LockKeyhole, roles: ['admin'] },
         { id: 'onboarding', label: 'آموزش بدو ورود', icon: BookOpen, roles: ['admin', 'supervisor', 'employee'] },
+      ]
+    },
+    {
+      title: 'پشتیبانی',
+      items: [
+        { id: 'support', label: currentUser.role === 'admin' ? 'مدیریت تیکت‌ها' : 'پشتیبانی و ارتباط با مدیر', icon: LifeBuoy, roles: ['admin', 'supervisor', 'employee'] }
       ]
     }
   ];
@@ -190,7 +200,11 @@ export default function Sidebar({
           {/* Navigation Menu */}
           <nav className="flex flex-col gap-3">
             {menuGroups.map((group, gIdx) => {
-              const visibleItems = group.items.filter(item => item.roles.includes(currentUser.role));
+              const visibleItems = group.items.filter(item => {
+              if (item.permission && !hasPerm(item.permission)) return false;
+              if (item.roles && !item.roles.includes(currentUser.role)) return false;
+              return true;
+            });
               if (visibleItems.length === 0) return null;
 
               return (

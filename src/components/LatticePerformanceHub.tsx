@@ -64,43 +64,31 @@ export default function LatticePerformanceHub({
   const [okrs, setOkrs] = useState<OKRGoal[]>(() => db.getOkrs());
 
   // Persistence for 1-on-1s
-  const [oneOnOnes, setOneOnOnes] = useState<OneOnOneMeeting[]>(() => {
-    try {
-      const saved = localStorage.getItem('pe_lattice_one_on_ones');
-      return saved ? JSON.parse(saved) : INITIAL_ONE_ON_ONES;
-    } catch {
-      return INITIAL_ONE_ON_ONES;
-    }
-  });
+  const [oneOnOnes, setOneOnOnes] = useState<OneOnOneMeeting[]>(() => 
+    db.getMiscData('pe_lattice_one_on_ones', INITIAL_ONE_ON_ONES)
+  );
 
   // Persistence for Kudos
-  const [kudosList, setKudosList] = useState<PraiseKudos[]>(() => {
-    try {
-      const saved = localStorage.getItem('pe_lattice_kudos');
-      return saved ? JSON.parse(saved) : INITIAL_KUDOS;
-    } catch {
-      return INITIAL_KUDOS;
-    }
-  });
+  const [kudosList, setKudosList] = useState<PraiseKudos[]>(() => 
+    db.getMiscData('pe_lattice_kudos', INITIAL_KUDOS)
+  );
 
   // Pulse Survey Metrics
-  const [pulseMetrics] = useState<PulseSurveyMetric[]>(() => {
-    try {
-      const saved = localStorage.getItem('pe_lattice_pulse');
-      return saved ? JSON.parse(saved) : INITIAL_PULSE_METRICS;
-    } catch {
-      return INITIAL_PULSE_METRICS;
-    }
-  });
+  const [pulseMetrics, setPulseMetrics] = useState<PulseSurveyMetric[]>(() => 
+    db.getMiscData('pe_lattice_pulse', INITIAL_PULSE_METRICS)
+  );
 
   // Real-time synchronization across app tabs and edit forms
   useEffect(() => {
     const unsub = db.subscribe((key, data) => {
       if (key === 'pe_lattice_okrs' && Array.isArray(data)) {
-        setOkrs(prev => {
-          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
-          return data;
-        });
+        setOkrs(prev => JSON.stringify(prev) === JSON.stringify(data) ? prev : data);
+      } else if (key === 'pe_lattice_one_on_ones' && Array.isArray(data)) {
+        setOneOnOnes(prev => JSON.stringify(prev) === JSON.stringify(data) ? prev : data);
+      } else if (key === 'pe_lattice_kudos' && Array.isArray(data)) {
+        setKudosList(prev => JSON.stringify(prev) === JSON.stringify(data) ? prev : data);
+      } else if (key === 'pe_lattice_pulse' && Array.isArray(data)) {
+        setPulseMetrics(prev => JSON.stringify(prev) === JSON.stringify(data) ? prev : data);
       }
     });
     return unsub;
@@ -112,12 +100,16 @@ export default function LatticePerformanceHub({
   }, [okrs]);
 
   useEffect(() => {
-    localStorage.setItem('pe_lattice_one_on_ones', JSON.stringify(oneOnOnes));
+    db.saveMiscData('pe_lattice_one_on_ones', oneOnOnes);
   }, [oneOnOnes]);
 
   useEffect(() => {
-    localStorage.setItem('pe_lattice_kudos', JSON.stringify(kudosList));
+    db.saveMiscData('pe_lattice_kudos', kudosList);
   }, [kudosList]);
+
+  useEffect(() => {
+    db.saveMiscData('pe_lattice_pulse', pulseMetrics);
+  }, [pulseMetrics]);
 
   // Modals & form states
   const [isNewOkrModalOpen, setIsNewOkrModalOpen] = useState(false);
@@ -253,24 +245,19 @@ export default function LatticePerformanceHub({
 
   // Save edited 1-on-1
   const handleSaveEdited1on1 = (updated: OneOnOneMeeting) => {
-    const nextList = oneOnOnes.map(m => m.id === updated.id ? updated : m);
-    setOneOnOnes(nextList);
-    try {
-      localStorage.setItem('pe_lattice_one_on_ones', JSON.stringify(nextList));
-    } catch {}
+    setOneOnOnes(prev => prev.map(m => m.id === updated.id ? updated : m));
     setEditing1on1(null);
   };
 
   // Delete 1-on-1
   const handleDelete1on1 = (meetingId: string) => {
-    const nextList = oneOnOnes.filter(m => m.id !== meetingId);
-    setOneOnOnes(nextList);
-    try {
-      localStorage.setItem('pe_lattice_one_on_ones', JSON.stringify(nextList));
-    } catch {}
-    if (selected1on1Id === meetingId) {
-      setSelected1on1Id(nextList[0]?.id || null);
-    }
+    setOneOnOnes(prev => {
+      const nextList = prev.filter(m => m.id !== meetingId);
+      if (selected1on1Id === meetingId) {
+        setSelected1on1Id(nextList[0]?.id || null);
+      }
+      return nextList;
+    });
     setDeleting1on1(null);
   };
 
@@ -298,21 +285,13 @@ export default function LatticePerformanceHub({
 
   // Save edited Kudos
   const handleSaveEditedKudos = (updated: PraiseKudos) => {
-    const nextList = kudosList.map(k => k.id === updated.id ? updated : k);
-    setKudosList(nextList);
-    try {
-      localStorage.setItem('pe_lattice_kudos', JSON.stringify(nextList));
-    } catch {}
+    setKudosList(prev => prev.map(k => k.id === updated.id ? updated : k));
     setEditingKudos(null);
   };
 
   // Delete Kudos
   const handleDeleteKudos = (kudosId: string) => {
-    const nextList = kudosList.filter(k => k.id !== kudosId);
-    setKudosList(nextList);
-    try {
-      localStorage.setItem('pe_lattice_kudos', JSON.stringify(nextList));
-    } catch {}
+    setKudosList(prev => prev.filter(k => k.id !== kudosId));
     setDeletingKudos(null);
   };
 

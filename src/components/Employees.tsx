@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Shield, Activity, UsersRound,  createPortal } from 'react-dom';
 import { validateEmployeeInput } from '../utils/validation';
 import { db, CURRENT_ACTIVE_PERIOD } from '../utils/db';
 import { 
@@ -28,13 +28,15 @@ import {
   ShieldCheck,
   AlertTriangle
 } from 'lucide-react';
-import { Employee, JobProfile, UserRole } from '../types';
+import { Employee, JobProfile, UserRole, Evaluation } from '../types';
 import { VirtualizedTable } from './VirtualizedTable';
+import { HighlightText } from './HighlightText';
 import UniversalDataExchange, { DataExchangeConfig } from './UniversalDataExchange';
 
 interface EmployeesProps {
   employees: Employee[];
   profiles: JobProfile[];
+  evaluations?: Evaluation[];
   onAddEmployee: (emp: Omit<Employee, 'id'>) => void;
   onUpdateEmployee: (id: string, emp: Omit<Employee, 'id'>) => void;
   onBulkUpdateEmployees?: (employees: Employee[]) => void;
@@ -78,6 +80,7 @@ const PRESET_ROSTERS = [
 
 export default function Employees({
   employees,
+  evaluations = [],
   profiles,
   onAddEmployee,
   onUpdateEmployee,
@@ -97,11 +100,58 @@ export default function Employees({
 
   // Bulk Selection State for Batch Actions
   const [selectedEmpIds, setSelectedEmpIds] = useState<Set<string>>(new Set());
+  const [presence, setPresence] = useState<Record<string, number>>(() => db.getMiscData('pe_presence', {}));
+  const [isBatchCreateModalOpen, setIsBatchCreateModalOpen] = useState(false);
+  const [batchText, setBatchText] = useState('');
+
+  useEffect(() => {
+    const unsub = db.subscribe((key, data) => {
+      if (key === 'pe_presence' && data) {
+        setPresence(data);
+      }
+    });
+    return unsub;
+  }, []);
+
+  const isOnline = (empId: string) => {
+    const lastSeen = presence[empId];
+    if (!lastSeen) return false;
+    return (Date.now() - lastSeen) < 30000; // Online if active in last 30s
+  };
+
 
   const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
 
   const isProtectedAdmin = (emp: Employee) => {
     return emp.username?.toLowerCase() === 'admin' && emp.code === 'ADMIN-001';
+  };
+
+  const handleBatchCreateSubmit = () => {
+    if (!batchText.trim()) return;
+    const lines = batchText.split('\n');
+    let addedCount = 0;
+    lines.forEach(line => {
+      const parts = line.split(',');
+      if (parts.length >= 3) {
+        const [name, code, unit, roleStr] = parts.map(p => p.trim());
+        if (name && code && unit) {
+          const emp = {
+            name,
+            code,
+            unit,
+            role: (roleStr === 'admin' || roleStr === 'supervisor' || roleStr === 'employee') ? roleStr : 'employee',
+            username: code.toLowerCase(),
+            profileId: profiles.length > 0 ? profiles[0].id : '',
+            permissions: []
+          };
+          onAddEmployee(emp as any);
+          addedCount++;
+        }
+      }
+    });
+    setIsBatchCreateModalOpen(false);
+    setBatchText('');
+    alert(`${addedCount} کاربر جدید اضافه شد.`);
   };
 
   const handleToggleSelectAll = () => {
@@ -662,14 +712,38 @@ export default function Employees({
     }
   };
 
-  const filteredEmployees = employees.filter(emp => {
-    const profile = profiles.find(p => p.id === emp.profileId);
-    return emp.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-           emp.code.toLowerCase().includes(searchTerm.toLowerCase()) || 
-           emp.unit.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           (profile?.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-           (emp.role || '').toLowerCase().includes(searchTerm.toLowerCase());
-  });
+  const getEvaluationStatus = (empId: string): string => {
+    const evalObj = evaluations.find(e => e.empId === empId && e.period === CURRENT_ACTIVE_PERIOD);
+    if (!evalObj) return 'not_started';
+    return evalObj.stage || evalObj.status;
+  };
+  const filteredEmployees = useMemo(() => {
+    return employees.filter(emp => {
+      const profile = profiles.find(p => p.id === emp.profileId);
+      const evalStatus = getEvaluationStatus(emp.id) as string;
+      
+      const roleFa = emp.role === 'admin' ? 'ادمین' : emp.role === 'supervisor' ? 'سرپرست' : 'کارمند';
+      const statusFa = evalStatus === 'not_started' ? 'ارزیابی نشده' :
+                       evalStatus === 'draft' ? 'پیش‌نویس' :
+                       evalStatus === 'self_review' ? 'خودارزیابی' :
+                       evalStatus === 'supervisor_review' ? 'ارزیابی سرپرست' :
+                       evalStatus === 'hr_approval' ? 'تایید منابع انسانی' :
+                       evalStatus === 'peer_review' ? 'ارزیابی همتا' :
+                       evalStatus === 'locked' ? 'بسته شده' :
+                       evalStatus === 'calibrated' ? 'کالیبره شده' :
+                       evalStatus === 'calibration_review' ? 'کالیبراسیون' :
+                       evalStatus === 'finalized' ? 'نهایی شده' : evalStatus;
+
+      const term = searchTerm.toLowerCase();
+      
+      return emp.name.toLowerCase().includes(term) || 
+             emp.code.toLowerCase().includes(term) || 
+             emp.unit.toLowerCase().includes(term) ||
+             (profile?.title || '').toLowerCase().includes(term) ||
+             roleFa.includes(term) ||
+             statusFa.includes(term);
+    });
+  }, [employees, profiles, searchTerm, evaluations]);
 
   const getRoleBadgeColor = (role: UserRole) => {
     switch (role) {
@@ -852,16 +926,19 @@ export default function Employees({
                 <div className="w-64 flex items-center gap-2.5 shrink-0">
                   <div className="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700/80 flex items-center justify-center text-xs font-bold text-teal-400 shrink-0 shadow-inner">
                     {emp.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
+                    {isOnline(emp.id) && (
+                      <span className="absolute -bottom-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-slate-900 rounded-full" title="آنلاین" />
+                    )}
                   </div>
                   <div className="min-w-0">
-                    <h4 className="font-bold text-slate-100 truncate">{emp.name}</h4>
-                    <span className="text-[10px] text-slate-400 truncate block">{emp.unit}</span>
+                    <h4 className="font-bold text-slate-100 truncate"><HighlightText text={emp.name} highlight={searchTerm} /></h4>
+                    <span className="text-[10px] text-slate-400 truncate block"><HighlightText text={emp.unit} highlight={searchTerm} /></span>
                   </div>
                 </div>
 
                 {/* Code & Username */}
                 <div className="w-44 shrink-0 font-mono text-[11px] text-slate-300">
-                  <div>{emp.code}</div>
+                  <div><HighlightText text={emp.code} highlight={searchTerm} /></div>
                   <div className="text-[10px] text-teal-400 font-sans">user: {emp.username}</div>
                 </div>
 
@@ -950,15 +1027,18 @@ export default function Employees({
                       )}
                       <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-semibold text-teal-400">
                         {emp.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
+                        {isOnline(emp.id) && (
+                          <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-slate-900 rounded-full animate-pulse" title="آنلاین" />
+                        )}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-bold text-slate-100">{emp.name}</h3>
+                          <h3 className="text-sm font-bold text-slate-100"><HighlightText text={emp.name} highlight={searchTerm} /></h3>
                           <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded ${getRoleBadgeColor(emp.role)}`}>
                             {getRoleLabel(emp.role)}
                           </span>
                         </div>
-                        <p className="text-[10px] text-slate-500 font-mono mt-0.5">{emp.code} • username: <span className="text-teal-400">{emp.username}</span></p>
+                        <p className="text-[10px] text-slate-500 font-mono mt-0.5"><HighlightText text={emp.code} highlight={searchTerm} /> • username: <span className="text-teal-400">{emp.username}</span></p>
                       </div>
                     </div>
 

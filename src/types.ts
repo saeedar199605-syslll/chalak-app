@@ -109,6 +109,7 @@ export interface Employee {
   calibrationLeadId?: string; // Calibration committee lead (Stage 3)
   approverId?: string; // Final HR Approver (Stage 4)
   hrPartnerId?: string; // HR Business Partner for feedback meeting (Stage 5)
+  permissions?: string[]; // Granular RBAC permissions
 }
 
 export type WorkflowStageKey = 
@@ -675,3 +676,16 @@ export interface KickidlerViolation {
   status: 'new' | 'acknowledged' | 'addressed';
 }
 
+
+
+export interface SupportTicket {
+  id: string;
+  senderId: string;
+  senderName: string;
+  subject: string;
+  message: string;
+  status: 'open' | 'in_progress' | 'closed';
+  createdAt: string;
+  updatedAt: string;
+  replies: { id: string; senderId: string; senderName: string; message: string; createdAt: string; isAdmin: boolean }[];
+}
