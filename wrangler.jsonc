@@ -1,39 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "chalak-performance-api",
-  "main": "worker/src/index.ts",
-  "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "chalak_performance_db",
-      "database_id": "xxxx-xxxx-xxxx-xxxx",
-      "migrations_dir": "worker/migrations"
-    }
+  "name": "chalak-performance",
+  "compatibility_date": "2025-03-01",
+  "compatibility_flags": [
+    "nodejs_compat"
   ],
-  "r2_buckets": [
-    {
-      "binding": "R2_BUCKET",
-      "bucket_name": "chalak-performance-vault"
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "REALTIME_ROOM",
-        "class_name": "WorkspaceRoom"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["WorkspaceRoom"]
-    }
-  ],
-  "assets": {
-    "directory": "./dist",
-    "binding": "ASSETS"
-  }
+  "pages_build_output_dir": "./dist"
 }

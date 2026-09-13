@@ -1,49 +1,38 @@
 {
   "name": "chalak-performance",
   "private": true,
-  "version": "2.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "dev:worker": "wrangler dev --port 8787",
-    "build": "vite build",
-    "build:worker": "wrangler deploy --dry-run",
-    "deploy": "vite build && wrangler deploy",
-    "d1:migrate:local": "wrangler d1 migrations apply DB --local",
-    "d1:migrate:prod": "wrangler d1 migrations apply DB --remote",
-    "d1:seed:local": "node --loader tsx worker/src/db/seed.ts --local",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "start": "node dist/server.cjs",
+    "lint": "tsc --noEmit",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@google/genai": "^2.18.0",
-    "@tanstack/react-query": "^5.66.9",
-    "clsx": "^2.1.1",
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/d3": "^7.4.3",
+    "@types/express": "^5.0.6",
+    "@vitejs/plugin-react": "^5.0.4",
     "d3": "^7.9.0",
-    "hono": "^4.7.2",
+    "dotenv": "^17.4.2",
+    "esbuild": "^0.28.2",
+    "express": "^5.2.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "tailwind-merge": "^3.0.2",
+    "tsx": "^4.23.12",
+    "vite": "^6.2.3",
     "xlsx": "^0.18.5",
-    "zod": "^3.24.2",
-    "zustand": "^5.0.3"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250224.0",
-    "@tailwindcss/vite": "^4.1.14",
-    "@types/d3": "^7.4.3",
     "@types/node": "^22.14.0",
-    "@types/react": "^19.0.10",
-    "@types/react-dom": "^19.0.4",
-    "@vitejs/plugin-react": "^5.0.4",
+    "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.23.12",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.3",
-    "vitest": "^3.0.8",
-    "wrangler": "^3.111.0"
+    "typescript": "~5.8.2"
   }
 }
